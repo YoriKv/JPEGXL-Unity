@@ -32,5 +32,14 @@ Encoded with cjxl 0.11.2 from generated or CC0 sources (phase 4 fixtures).
 | `alpha_gradient.jxl` | 256x256 RGBA lossless; alpha = x/255 with a fully transparent 64x64 hole at (96,96); R = 255-y, G = x, B = 128 | generated |
 | `gray_16bit.jxl` | 512x512, 16-bit grayscale lossless; value = (x*128 + (y%64)*7) & 0xFFFF | generated |
 | `animated_4frames.jxl` | 128x128, 4 frames, 100 ms each, moving yellow square | generated GIF |
-| `hdr_linear_float.jxl` | 256x128, 32-bit float lossless, linear sRGB; R = 16*x/255, G = y/127, B = 0.5 | generated PFM |
+| `hdr_linear_float.jxl` | 256x128, 32-bit float lossless, linear sRGB; R = 16*x/255, G = y/127 with y counted from the bottom row, B = 0.5 | generated PFM |
 | `odd_123x77_lossy.jxl` | 123x77, lossy (distance 2), not a multiple of 4 | downscaled photo |
+
+## HDR calibration patches (phase 3)
+
+Generated 64x8 float images with eight 8-pixel-wide grey patches, encoded with cjxl 0.11.2 and tagged Rec.2100.
+
+| File | Patches (left to right) |
+|---|---|
+| `HDR/pq_patches_rec2100.jxl` | PQ-encoded 0, 1, 10, 100, 203, 1000, 4000, 10000 nits (intensity target 10000) |
+| `HDR/hlg_patches_rec2100.jxl` | HLG-encoded scene-linear 0, 0.01, 0.1, 0.25, 0.5, 0.75, 1.0, 1.0 (intensity target 1000) |

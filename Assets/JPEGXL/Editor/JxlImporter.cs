@@ -18,6 +18,15 @@ namespace JpegXL.Editor
     /// SDR files go through the <see cref="Color32"/> overload; HDR files (PQ, HLG or float samples) are decoded to linear
     /// float and go through the <see cref="Color"/> overload, which yields RGBAHalf (uncompressed) or BC6H (compressed).
     /// </summary>
+    /// <summary>Colour primaries for imported HDR textures.</summary>
+    public enum JxlHdrPrimaries
+    {
+        /// <summary>sRGB / Rec.709 primaries (Unity's default linear working space).</summary>
+        SRgb,
+        /// <summary>Rec.2100 / Rec.2020 primaries (wide gamut).</summary>
+        Rec2100
+    }
+
     [ScriptedImporter(2, "jxl")]
     public sealed class JxlImporter : ScriptedImporter
     {
@@ -41,6 +50,16 @@ namespace JpegXL.Editor
 
         [Tooltip("Ask the decoder to undo premultiplied alpha when the file stores premultiplied color.")]
         public bool unpremultiplyAlpha = true;
+
+        [Tooltip("HDR (PQ/HLG) files: luminance in nits that maps to 1.0 in the texture. 203 is the ITU-R BT.2408 HDR reference white, matching Unity's convention that 1.0 is SDR white. 0 keeps libjxl's scale, where 1.0 is the file's intensity target (its peak, usually 10000 nits for PQ and 1000 for HLG). Not applied to linear floating-point files.")]
+        [Min(0f)]
+        public float hdrReferenceWhiteNits = 203f;
+
+        [Tooltip("HDR files: colour primaries of the imported linear texture. sRGB (Rec.709) matches Unity's linear working space; out-of-gamut colours get negative components (see Clamp Negative). Rec.2100 keeps the wide gamut for projects that render in Rec.2020.")]
+        public JxlHdrPrimaries hdrPrimaries = JxlHdrPrimaries.SRgb;
+
+        [Tooltip("HDR files: clamp negative components (out-of-gamut colours after conversion to sRGB primaries) to 0. BC6H cannot store negative values.")]
+        public bool hdrClampNegative = true;
 
         /// <summary>Texture settings matching what <see cref="TextureImporter"/> uses for a newly imported image of type Default.</summary>
         public static TextureImporterSettings CreateDefaultTextureSettings()
@@ -162,7 +181,7 @@ namespace JpegXL.Editor
 
                 JxlColorTarget colorTarget;
                 if (isHdr)
-                    colorTarget = JxlColorTarget.LinearSRgb;
+                    colorTarget = hdrPrimaries == JxlHdrPrimaries.Rec2100 ? JxlColorTarget.LinearRec2100 : JxlColorTarget.LinearSRgb;
                 else if (convertToSRGB && (info.IsWideGamut || info.Transfer != JxlTransfer.SRgb))
                     colorTarget = JxlColorTarget.SRgb;
                 else
@@ -196,6 +215,7 @@ namespace JpegXL.Editor
                         throw new InvalidOperationException($"Decoder returned {(decoded.Pixels == null ? 0 : decoded.Pixels.Length)} bytes, expected {expected} for {width}x{height} RGBA float.");
                     hdrPixels = new NativeArray<Color>(pixelCount, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
                     hdrPixels.Reinterpret<byte>(16).CopyFrom(decoded.Pixels);
+                    ScaleHdr(hdrPixels, decodedInfo);
                 }
                 else
                 {
@@ -309,6 +329,35 @@ namespace JpegXL.Editor
             {
                 byte[] hash = md5.ComputeHash(Encoding.UTF8.GetBytes(seed));
                 return new GUID(BitConverter.ToString(hash).Replace("-", string.Empty).ToLowerInvariant()).ToString();
+            }
+        }
+
+        /// <summary>
+        /// libjxl's linear output puts the file's intensity target (its nominal peak) at 1.0: PQ gives nits / intensity_target,
+        /// HLG applies the OOTF and normalises the peak to 1.0 (measured, see Docs/JXL-Importer-Plan.md). Rescale so that
+        /// <see cref="hdrReferenceWhiteNits"/> lands at 1.0, and optionally clamp out-of-gamut negatives. Linear float
+        /// sources are left as authored.
+        /// </summary>
+        void ScaleHdr(NativeArray<Color> pixels, JxlImageInfo info)
+        {
+            bool scenePeakEncoded = info.Transfer == JxlTransfer.PQ || info.Transfer == JxlTransfer.HLG;
+            float scale = scenePeakEncoded && hdrReferenceWhiteNits > 0f && info.IntensityTarget > 0f
+                ? info.IntensityTarget / hdrReferenceWhiteNits
+                : 1f;
+            if (Mathf.Approximately(scale, 1f) && !hdrClampNegative)
+                return;
+
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                Color c = pixels[i];
+                c.r *= scale; c.g *= scale; c.b *= scale;
+                if (hdrClampNegative)
+                {
+                    if (c.r < 0f) c.r = 0f;
+                    if (c.g < 0f) c.g = 0f;
+                    if (c.b < 0f) c.b = 0f;
+                }
+                pixels[i] = c;
             }
         }
 

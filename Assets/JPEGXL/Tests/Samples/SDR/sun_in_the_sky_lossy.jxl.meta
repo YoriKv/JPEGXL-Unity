@@ -134,3 +134,6 @@ ScriptedImporter:
     androidETC2FallbackOverride: 0
   convertToSRGB: 1
   unpremultiplyAlpha: 1
+  hdrReferenceWhiteNits: 203
+  hdrPrimaries: 0
+  hdrClampNegative: 1

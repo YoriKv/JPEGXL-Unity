@@ -79,6 +79,9 @@ namespace JpegXL.Editor
         // JXL-specific
         SerializedProperty m_ConvertToSRGB;
         SerializedProperty m_UnpremultiplyAlpha;
+        SerializedProperty m_HdrReferenceWhiteNits;
+        SerializedProperty m_HdrPrimaries;
+        SerializedProperty m_HdrClampNegative;
 
         // Platform settings
         SerializedProperty m_DefaultPlatform;
@@ -131,6 +134,9 @@ namespace JpegXL.Editor
 
             m_ConvertToSRGB = serializedObject.FindProperty(nameof(JxlImporter.convertToSRGB));
             m_UnpremultiplyAlpha = serializedObject.FindProperty(nameof(JxlImporter.unpremultiplyAlpha));
+            m_HdrReferenceWhiteNits = serializedObject.FindProperty(nameof(JxlImporter.hdrReferenceWhiteNits));
+            m_HdrPrimaries = serializedObject.FindProperty(nameof(JxlImporter.hdrPrimaries));
+            m_HdrClampNegative = serializedObject.FindProperty(nameof(JxlImporter.hdrClampNegative));
             m_DefaultPlatform = serializedObject.FindProperty(nameof(JxlImporter.defaultPlatformSettings));
             m_PlatformOverrides = serializedObject.FindProperty(nameof(JxlImporter.platformOverrides));
 
@@ -306,6 +312,12 @@ namespace JpegXL.Editor
 
                 EditorGUILayout.PropertyField(m_ConvertToSRGB, new GUIContent("Convert Wide Gamut to sRGB", m_ConvertToSRGB.tooltip));
                 EditorGUILayout.PropertyField(m_UnpremultiplyAlpha, new GUIContent("Unpremultiply Alpha", m_UnpremultiplyAlpha.tooltip));
+
+                EditorGUILayout.Space(2f);
+                EditorGUILayout.LabelField("HDR (PQ / HLG / float files)", EditorStyles.miniBoldLabel);
+                EditorGUILayout.PropertyField(m_HdrReferenceWhiteNits, new GUIContent("Reference White (nits)", m_HdrReferenceWhiteNits.tooltip));
+                EditorGUILayout.PropertyField(m_HdrPrimaries, new GUIContent("Primaries", m_HdrPrimaries.tooltip));
+                EditorGUILayout.PropertyField(m_HdrClampNegative, new GUIContent("Clamp Negative", m_HdrClampNegative.tooltip));
             }
         }
 

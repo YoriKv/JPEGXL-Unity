@@ -12,6 +12,7 @@ namespace JpegXL.Tests
     {
         const string SdrDir = "Assets/JPEGXL/Tests/Samples/SDR/";
         const string HdrDir = "Assets/JPEGXL/Tests/Samples/HDR/";
+        const string RealDir = "Assets/JPEGXL/Tests/Samples/Real/";
 
         const string Merry = SdrDir + "merry_jxl_mas.jxl";
         const string HardwareAlpha = SdrDir + "hardware_alpha_4k.jxl";
@@ -311,7 +312,152 @@ namespace JpegXL.Tests
                     importer.platformOverrides[i] = JxlImporter.CreatePlatformSettings(importer.platformOverrides[i].name);
                 importer.convertToSRGB = true;
                 importer.unpremultiplyAlpha = true;
+                importer.hdrReferenceWhiteNits = 203f;
+                importer.hdrPrimaries = JxlHdrPrimaries.SRgb;
+                importer.hdrClampNegative = true;
             });
+        }
+
+        // ---------------------------------------------------------------- phase 3: HDR scaling and primaries
+
+        const string PqPatches = HdrDir + "pq_patches_rec2100.jxl";   // 64x8, patches of 0,1,10,100,203,1000,4000,10000 nits
+        const string HlgPatches = HdrDir + "hlg_patches_rec2100.jxl"; // 64x8, scene-linear 0,.01,.1,.25,.5,.75,1,1
+
+        static void MakeReadableUncompressed(JxlImporter importer)
+        {
+            importer.textureSettings.readable = true;
+            importer.textureSettings.npotScale = TextureImporterNPOTScale.None;
+            importer.textureSettings.mipmapEnabled = false;
+            importer.defaultPlatformSettings.textureCompression = TextureImporterCompression.Uncompressed;
+        }
+
+        static Color Patch(Texture2D tex, int patch) => tex.GetPixel(patch * 8 + 4, 3);
+
+        [Test]
+        public void PqPatches_DefaultReferenceWhite203_MapsTo1()
+        {
+            try
+            {
+                Reimport(PqPatches, MakeReadableUncompressed);
+                var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(PqPatches);
+                Assert.AreEqual(TextureFormat.RGBAHalf, tex.format);
+                Assert.AreEqual(1f, Patch(tex, 4).r, 0.01f, "203 nits");
+                Assert.AreEqual(1000f / 203f, Patch(tex, 5).r, 0.05f, "1000 nits");
+                Assert.AreEqual(10000f / 203f, Patch(tex, 7).r, 0.5f, "10000 nits");
+                Assert.AreEqual(0f, Patch(tex, 0).r, 0.001f, "0 nits");
+                Assert.AreEqual(1f, Patch(tex, 7).a, 0.001f, "alpha");
+            }
+            finally
+            {
+                RestoreDefaults(PqPatches);
+            }
+        }
+
+        [Test]
+        public void PqPatches_ReferenceWhiteZero_KeepsIntensityTargetScale()
+        {
+            try
+            {
+                Reimport(PqPatches, importer => { MakeReadableUncompressed(importer); importer.hdrReferenceWhiteNits = 0f; });
+                var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(PqPatches);
+                Assert.AreEqual(0.0203f, Patch(tex, 4).r, 0.001f, "203 nits");
+                Assert.AreEqual(1f, Patch(tex, 7).r, 0.01f, "10000 nits");
+            }
+            finally
+            {
+                RestoreDefaults(PqPatches);
+            }
+        }
+
+        [Test]
+        public void HlgPatches_DefaultReferenceWhite_AppliesOotfAndScale()
+        {
+            try
+            {
+                Reimport(HlgPatches, MakeReadableUncompressed);
+                var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(HlgPatches);
+                // libjxl: scene 1.0 -> 1.0 (1000 nits), scene 0.5 -> 0.5^1.2 = 0.435; importer scales by 1000/203.
+                Assert.AreEqual(1000f / 203f, Patch(tex, 6).r, 0.05f, "scene 1.0");
+                Assert.AreEqual(0.4353f * 1000f / 203f, Patch(tex, 4).r, 0.05f, "scene 0.5");
+            }
+            finally
+            {
+                RestoreDefaults(HlgPatches);
+            }
+        }
+
+        [Test]
+        public void Bt2111_SrgbPrimariesClamped_HasNoNegatives_AndRec2100_KeepsSmallNegativesWhenUnclamped()
+        {
+            try
+            {
+                Reimport(Bt2111Pq, MakeReadableUncompressed);
+                var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(Bt2111Pq);
+                Assert.AreEqual(1920, tex.width);
+                float min = MinRgb(tex);
+                Assert.GreaterOrEqual(min, 0f, "clamped sRGB import must not contain negatives");
+
+                Reimport(Bt2111Pq, importer => { MakeReadableUncompressed(importer); importer.hdrPrimaries = JxlHdrPrimaries.Rec2100; importer.hdrClampNegative = false; });
+                tex = AssetDatabase.LoadAssetAtPath<Texture2D>(Bt2111Pq);
+                min = MinRgb(tex);
+                // Decoder output in Rec.2100 primaries has a -0.004 sub-black element; scaled by 10000/203 that is about -0.2.
+                Assert.Greater(min, -0.3f, "Rec.2100 primaries should avoid the large out-of-gamut negatives of sRGB");
+                Assert.Less(min, 0f, "unclamped import keeps the pattern's sub-black element");
+            }
+            finally
+            {
+                RestoreDefaults(Bt2111Pq);
+            }
+        }
+
+        [Test]
+        public void HdrLinearFloat_PassesThroughUnscaled()
+        {
+            const string path = RealDir + "hdr_linear_float.jxl"; // R = 16*x/255, G = y/127 (y from the bottom, PFM order), B = 0.5
+            try
+            {
+                Reimport(path, MakeReadableUncompressed);
+                var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+                Assert.AreEqual(TextureFormat.RGBAHalf, tex.format);
+                Color c = tex.GetPixel(255, 127);
+                Assert.AreEqual(16f, c.r, 0.02f, "R");
+                Assert.AreEqual(1f, c.g, 0.01f, "G at top row");
+                Assert.AreEqual(0.5f, c.b, 0.01f, "B");
+                c = tex.GetPixel(0, 0);
+                Assert.AreEqual(0f, c.r, 0.01f, "R at x=0");
+                Assert.AreEqual(0f, c.g, 0.01f, "G at bottom row");
+            }
+            finally
+            {
+                RestoreDefaults(path);
+            }
+        }
+
+        [Test]
+        public void Decode_Bt2111_LinearRec2100_HasNoLargeNegatives()
+        {
+            var options = new JxlDecodeOptions { Output = JxlPixelOutput.RgbaFloat, ColorTarget = JxlColorTarget.LinearRec2100, FlipVertically = true };
+            JxlDecodedImage image = JxlDecoder.Decode(File.ReadAllBytes(Bt2111Pq), options);
+            Assert.IsTrue(image.IsLinear);
+            var floats = new float[image.Pixels.Length / 4];
+            Buffer.BlockCopy(image.Pixels, 0, floats, 0, image.Pixels.Length);
+            float min = float.MaxValue;
+            for (int i = 0; i < floats.Length; i++)
+                if ((i & 3) != 3 && floats[i] < min) min = floats[i];
+            Assert.Greater(min, -0.01f);
+        }
+
+        static float MinRgb(Texture2D tex)
+        {
+            Color[] px = tex.GetPixels();
+            float min = float.MaxValue;
+            foreach (Color c in px)
+            {
+                if (c.r < min) min = c.r;
+                if (c.g < min) min = c.g;
+                if (c.b < min) min = c.b;
+            }
+            return min;
         }
 
         // ---------------------------------------------------------------- g. orientation and colour
