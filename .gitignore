@@ -121,3 +121,4 @@ InitTestScene*.unity*
 /AgentScripts/
 /**/CLAUDE.md
 /Assets/Scripts/AgentProbe*
+/Assets/Scripts.meta
