@@ -48,16 +48,42 @@ jobs:
       - name: Build
         working-directory: libjxl
         run: cmake --build build --target jxl jxl_cms jxl_threads
-      - name: Collect
+      - name: Collect and normalise names
         working-directory: libjxl
         run: |
           mkdir -p out
-          find build -type f \( -name 'libjxl*.dylib' -o -name 'libjxl*.so*' -o -name 'libbrotli*.dylib' -o -name 'libbrotli*.so*' \) -exec cp -v {} out/ \;
-          # Also keep the unversioned names as real files (dereferenced symlinks) for Unity's name probing.
-          find build -type l \( -name 'libjxl*.dylib' -o -name 'libjxl*.so' -o -name 'libbrotli*.dylib' -o -name 'libbrotli*.so' \) -exec cp -Lv {} out/ \;
-          ls -la out
+          # Keep one file per library under the name Unity probes for DllImport("jxl") etc. (dereferenced symlinks).
+          for lib in jxl jxl_cms jxl_threads brotlicommon brotlidec brotlienc; do
+            src=$(find build -type l \( -name "lib$lib.dylib" -o -name "lib$lib.so" \) | head -1)
+            [ -n "$src" ] || src=$(find build -type f \( -name "lib$lib.*.dylib" -o -name "lib$lib.so.*" \) | head -1)
+            ext=${src##*.}; case "$src" in *.dylib) ext=dylib;; *) ext=so;; esac
+            cp -L "$src" "out/lib$lib.$ext"
+          done
+          cd out
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            for f in *.dylib; do install_name_tool -id "@rpath/$f" "$f"; done
+            for f in *.dylib; do
+              for dep in $(otool -L "$f" | awk 'NR>1 {print $1}' | grep '^@rpath/'); do
+                base=$(basename "$dep"); plain=$(echo "$base" | sed -E 's/\.[0-9]+(\.[0-9]+)*\.dylib$/.dylib/')
+                [ "$base" != "$plain" ] && install_name_tool -change "$dep" "@rpath/$plain" "$f"
+              done
+              install_name_tool -add_rpath @loader_path "$f" 2>/dev/null || true
+              codesign -s - -f "$f"
+            done
+          else
+            sudo apt-get install -y patchelf
+            for f in *.so; do
+              patchelf --set-soname "$f" "$f"
+              for dep in $(patchelf --print-needed "$f" | grep -E '^lib(jxl|brotli)'); do
+                plain=$(echo "$dep" | sed -E 's/\.so\.[0-9.]+$/.so/')
+                [ "$dep" != "$plain" ] && patchelf --replace-needed "$dep" "$plain" "$f"
+              done
+              patchelf --set-rpath '$ORIGIN' "$f"
+            done
+          fi
+          ls -la
           echo "--- dependencies:"
-          for f in out/*; do echo "== $f"; (otool -L "$f" 2>/dev/null || (readelf -d "$f" | grep -E 'NEEDED|RUNPATH|RPATH|SONAME')) ; done
+          for f in *; do echo "== $f"; (otool -L "$f" 2>/dev/null; otool -l "$f" 2>/dev/null | grep -A2 LC_RPATH | grep path) || (readelf -d "$f" | grep -E 'NEEDED|RUNPATH|RPATH|SONAME'); done
       - uses: actions/upload-artifact@v4
         with:
           name: libjxl-${{ matrix.name }}
@@ -81,7 +107,7 @@ jobs:
         run: |
           mkdir -p universal
           for f in arm64/*.dylib; do b=$(basename "$f"); if [ -f "x86_64/$b" ]; then lipo -create "$f" "x86_64/$b" -output "universal/$b"; else cp "$f" "universal/$b"; fi; done
-          for f in universal/*; do echo "== $f"; lipo -info "$f"; done
+          for f in universal/*; do codesign -s - -f "$f"; echo "== $f"; lipo -info "$f"; done
       - uses: actions/upload-artifact@v4
         with:
           name: libjxl-macos-universal
