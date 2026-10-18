@@ -1,0 +1,22 @@
+fileFormatVersion: 2
+guid: 0b568c420010c3d4f8c0c2412fd02f78
+ScriptedImporter:
+  internalIDToNameTable: []
+  externalObjects: {}
+  serializedVersion: 2
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+  script: {fileID: 11500000, guid: 50eb3d48ef40c6f468dbbc505ab953b0, type: 3}
+  sRGBTexture: 1
+  generateMipMaps: 1
+  filterMode: 1
+  wrapMode: 0
+  anisoLevel: 1
+  alphaSource: 0
+  alphaIsTransparency: 1
+  unpremultiplyAlpha: 1
+  convertToSRGB: 1
+  hdrPrecision: 0
+  compression: 1
+  isReadable: 0

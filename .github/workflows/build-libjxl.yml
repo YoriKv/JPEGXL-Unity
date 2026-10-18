@@ -1,0 +1,75 @@
+# Builds libjxl 0.12.0 shared libraries for the macOS and Linux editors.
+# Outputs are downloaded and committed into Assets/JPEGXL/Plugins/Editor/{OSX,Linux}; see Docs/JXL-Importer-Plan.md.
+name: build-libjxl
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/build-libjxl.yml']
+env:
+  LIBJXL_REF: v0.12.0
+  CMAKE_FLAGS: >-
+    -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DJPEGXL_STATIC=OFF -DBUILD_TESTING=OFF
+    -DJPEGXL_ENABLE_TOOLS=OFF -DJPEGXL_ENABLE_BENCHMARK=OFF -DJPEGXL_ENABLE_EXAMPLES=OFF
+    -DJPEGXL_ENABLE_MANPAGES=OFF -DJPEGXL_ENABLE_DOXYGEN=OFF -DJPEGXL_ENABLE_SJPEG=OFF
+    -DJPEGXL_ENABLE_OPENEXR=OFF -DJPEGXL_ENABLE_PLUGINS=OFF -DJPEGXL_ENABLE_VIEWERS=OFF
+    -DJPEGXL_ENABLE_JNI=OFF -DJPEGXL_ENABLE_DEVTOOLS=OFF -DJPEGXL_ENABLE_JPEGLI=OFF
+    -DJPEGXL_BUNDLE_LIBPNG=OFF -DJPEGXL_ENABLE_TCMALLOC=OFF -DJPEGXL_ENABLE_FUZZERS=OFF
+    -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, name: macos-arm64, rpath: '@loader_path', arch: arm64 }
+          - { os: macos-15-intel, name: macos-x86_64, rpath: '@loader_path', arch: x86_64 }
+          - { os: ubuntu-22.04, name: linux-x86_64, rpath: '$ORIGIN', arch: x86_64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: libjxl/libjxl, ref: v0.12.0, submodules: recursive, path: libjxl }
+      - name: Install build tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build clang
+      - name: Install build tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja
+      - name: Configure
+        working-directory: libjxl
+        run: |
+          EXTRA=""
+          if [ "${{ runner.os }}" = "Linux" ]; then export CC=clang CXX=clang++; fi
+          if [ "${{ runner.os }}" = "macOS" ]; then EXTRA="-DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0"; fi
+          cmake -B build -G Ninja ${{ env.CMAKE_FLAGS }} -DCMAKE_INSTALL_RPATH='${{ matrix.rpath }}' $EXTRA
+      - name: Build
+        working-directory: libjxl
+        run: cmake --build build --target jxl jxl_cms jxl_threads
+      - name: Collect
+        working-directory: libjxl
+        run: |
+          mkdir -p out
+          find build -type f \( -name 'libjxl*.dylib' -o -name 'libjxl*.so*' -o -name 'libbrotli*.dylib' -o -name 'libbrotli*.so*' \) -exec cp -v {} out/ \;
+          # Also keep the unversioned names as real files (dereferenced symlinks) for Unity's name probing.
+          find build -type l \( -name 'libjxl*.dylib' -o -name 'libjxl*.so' -o -name 'libbrotli*.dylib' -o -name 'libbrotli*.so' \) -exec cp -Lv {} out/ \;
+          ls -la out
+          echo "--- dependencies:"
+          for f in out/*; do echo "== $f"; (otool -L "$f" 2>/dev/null || (readelf -d "$f" | grep -E 'NEEDED|RUNPATH|RPATH|SONAME')) ; done
+      - uses: actions/upload-artifact@v4
+        with: { name: libjxl-${{ matrix.name }}, path: libjxl/out/, if-no-files-found: error }
+  universal:
+    needs: build
+    runs-on: macos-14
+    if: always()
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: libjxl-macos-arm64, path: arm64 }
+      - uses: actions/download-artifact@v4
+        with: { name: libjxl-macos-x86_64, path: x86_64 }
+        continue-on-error: true
+      - name: lipo
+        run: |
+          mkdir -p universal
+          for f in arm64/*.dylib; do b=$(basename "$f"); if [ -f "x86_64/$b" ]; then lipo -create "$f" "x86_64/$b" -output "universal/$b"; else cp "$f" "universal/$b"; fi; done
+          for f in universal/*; do echo "== $f"; lipo -info "$f"; done
+      - uses: actions/upload-artifact@v4
+        with: { name: libjxl-macos-universal, path: universal/, if-no-files-found: error }

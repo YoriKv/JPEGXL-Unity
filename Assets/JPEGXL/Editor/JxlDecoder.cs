@@ -21,6 +21,8 @@ namespace JpegXL.Editor
         SRgb,
         /// <summary>Convert to sRGB primaries with a linear transfer (via jxl_cms).</summary>
         LinearSRgb,
+        /// <summary>Convert to Rec.2100 (Rec.2020) primaries with a linear transfer (via jxl_cms). Keeps wide-gamut HDR colours without negative components.</summary>
+        LinearRec2100,
     }
 
     public enum JxlTransfer { Unknown, SRgb, Linear, PQ, HLG, Gamma, BT709, DCI, Icc }
@@ -352,7 +354,7 @@ namespace JpegXL.Editor
             if (options.FlipVertically)
                 FlipRows(pixels, info.Width * 4 * bytesPerChannel, info.Height);
 
-            bool isLinear = options.ColorTarget == JxlColorTarget.LinearSRgb ||
+            bool isLinear = options.ColorTarget == JxlColorTarget.LinearSRgb || options.ColorTarget == JxlColorTarget.LinearRec2100 ||
                             (options.ColorTarget == JxlColorTarget.Original && info.Transfer == JxlTransfer.Linear);
 
             return new JxlDecodedImage
@@ -480,6 +482,13 @@ namespace JpegXL.Editor
             int gray = isGray ? Native.JxlNative.JXL_TRUE : Native.JxlNative.JXL_FALSE;
             if (target == JxlColorTarget.LinearSRgb)
                 Native.JxlNative.JxlColorEncodingSetToLinearSRGB(&enc, gray);
+            else if (target == JxlColorTarget.LinearRec2100)
+            {
+                // Same as SetToLinearSRGB but with Rec.2100 primaries (color_encoding.h enum values).
+                Native.JxlNative.JxlColorEncodingSetToLinearSRGB(&enc, gray);
+                if (!isGray)
+                    enc.primaries = Native.JxlPrimaries.JXL_PRIMARIES_2100;
+            }
             else
                 Native.JxlNative.JxlColorEncodingSetToSRGB(&enc, gray);
 
