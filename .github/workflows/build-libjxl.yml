@@ -27,7 +27,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-        with: { repository: libjxl/libjxl, ref: v0.12.0, submodules: recursive, path: libjxl }
+        with:
+          repository: libjxl/libjxl
+          ref: v0.12.0
+          submodules: recursive
+          path: libjxl
       - name: Install build tools (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build clang
@@ -55,16 +59,23 @@ jobs:
           echo "--- dependencies:"
           for f in out/*; do echo "== $f"; (otool -L "$f" 2>/dev/null || (readelf -d "$f" | grep -E 'NEEDED|RUNPATH|RPATH|SONAME')) ; done
       - uses: actions/upload-artifact@v4
-        with: { name: libjxl-${{ matrix.name }}, path: libjxl/out/, if-no-files-found: error }
+        with:
+          name: libjxl-${{ matrix.name }}
+          path: libjxl/out/
+          if-no-files-found: error
   universal:
     needs: build
     runs-on: macos-14
     if: always()
     steps:
       - uses: actions/download-artifact@v4
-        with: { name: libjxl-macos-arm64, path: arm64 }
+        with:
+          name: libjxl-macos-arm64
+          path: arm64
       - uses: actions/download-artifact@v4
-        with: { name: libjxl-macos-x86_64, path: x86_64 }
+        with:
+          name: libjxl-macos-x86_64
+          path: x86_64
         continue-on-error: true
       - name: lipo
         run: |
@@ -72,4 +83,7 @@ jobs:
           for f in arm64/*.dylib; do b=$(basename "$f"); if [ -f "x86_64/$b" ]; then lipo -create "$f" "x86_64/$b" -output "universal/$b"; else cp "$f" "universal/$b"; fi; done
           for f in universal/*; do echo "== $f"; lipo -info "$f"; done
       - uses: actions/upload-artifact@v4
-        with: { name: libjxl-macos-universal, path: universal/, if-no-files-found: error }
+        with:
+          name: libjxl-macos-universal
+          path: universal/
+          if-no-files-found: error
