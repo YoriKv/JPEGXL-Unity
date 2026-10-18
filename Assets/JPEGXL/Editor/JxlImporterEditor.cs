@@ -222,21 +222,25 @@ namespace JpegXL.Editor
             switch ((TextureImporterType)m_TextureType.intValue)
             {
                 case TextureImporterType.Sprite:
-                    using (new EditorGUI.DisabledScope(true))
-                        EditorGUILayout.LabelField(new GUIContent("Sprite Mode", "JPEG XL files import as a single sprite covering the whole image."), new GUIContent("Single"));
+                    DrawSpriteMode();
                     using (new EditorGUI.IndentLevelScope())
                     {
                         FloatField(m_SpritePixelsToUnits, "Pixels Per Unit", 0.001f);
                         EnumField<SpriteMeshType>(m_SpriteMeshType, "Mesh Type");
                         IntSlider(m_SpriteExtrude, "Extrude Edges", 0, 32);
-                        EnumField<SpriteAlignment>(m_Alignment, "Pivot");
-                        if (!m_Alignment.hasMultipleDifferentValues && m_Alignment.intValue == (int)SpriteAlignment.Custom)
+                        // Multiple mode keeps a pivot per sprite (edited in the Sprite Editor), like TextureImporter.
+                        if (m_SpriteMode.hasMultipleDifferentValues || m_SpriteMode.intValue != (int)SpriteImportMode.Multiple)
                         {
-                            using (new EditorGUI.IndentLevelScope())
-                                EditorGUILayout.PropertyField(m_SpritePivot, new GUIContent("Custom Pivot"));
+                            EnumField<SpriteAlignment>(m_Alignment, "Pivot");
+                            if (!m_Alignment.hasMultipleDifferentValues && m_Alignment.intValue == (int)SpriteAlignment.Custom)
+                            {
+                                using (new EditorGUI.IndentLevelScope())
+                                    EditorGUILayout.PropertyField(m_SpritePivot, new GUIContent("Custom Pivot"));
+                            }
                         }
                         Toggle(m_SpriteGenerateFallbackPhysicsShape, "Generate Physics Shape");
                     }
+                    DrawSpriteEditorButton();
                     break;
 
                 case TextureImporterType.NormalMap:
@@ -257,6 +261,70 @@ namespace JpegXL.Editor
                     break;
             }
         }
+
+        static readonly GUIContent[] s_SpriteModeLabels = { new GUIContent("Single"), new GUIContent("Multiple") };
+        static readonly int[] s_SpriteModeValues = { (int)SpriteImportMode.Single, (int)SpriteImportMode.Multiple };
+
+        void DrawSpriteMode()
+        {
+            EditorGUI.BeginChangeCheck();
+            EditorGUI.showMixedValue = m_SpriteMode.hasMultipleDifferentValues;
+            // Polygon is not supported and imports as Single, so show it as Single.
+            int current = m_SpriteMode.intValue == (int)SpriteImportMode.Multiple ? (int)SpriteImportMode.Multiple : (int)SpriteImportMode.Single;
+            int value = EditorGUILayout.IntPopup(new GUIContent("Sprite Mode",
+                "Single: one sprite covering the whole image. Multiple: several sprites cut out with the Sprite Editor."),
+                current, s_SpriteModeLabels, s_SpriteModeValues);
+            EditorGUI.showMixedValue = false;
+            if (EditorGUI.EndChangeCheck())
+                m_SpriteMode.intValue = value;
+        }
+
+        void DrawSpriteEditorButton()
+        {
+#if JXL_2D_SPRITE
+            using (new EditorGUI.DisabledScope(targets.Length != 1))
+            {
+                GUILayout.BeginHorizontal();
+                GUILayout.FlexibleSpace();
+                bool open = GUILayout.Button(new GUIContent("Open Sprite Editor", "Slice the texture into sprites and edit names, pivots and borders."), GUILayout.Width(150));
+                GUILayout.EndHorizontal();
+                if (open)
+                {
+                    string path = ((AssetImporter)target).assetPath;
+                    if (HasModified())
+                    {
+                        int choice = EditorUtility.DisplayDialogComplex("Unapplied import settings",
+                            $"Unapplied import settings for '{path}'.\nThe Sprite Editor works on the applied settings.", "Apply", "Cancel", "Revert");
+                        if (choice == 1)
+                            GUIUtility.ExitGUI();
+                        if (choice == 0)
+                            SaveChanges();
+                        else
+                            DiscardChanges();
+                    }
+                    EditorApplication.delayCall += () => OpenSpriteEditor(path);
+                    GUIUtility.ExitGUI();
+                }
+            }
+#else
+            EditorGUILayout.HelpBox("Install the 2D Sprite package (com.unity.2d.sprite) to slice this texture in the Sprite Editor.", MessageType.Info);
+#endif
+        }
+
+#if JXL_2D_SPRITE
+        /// <summary>
+        /// The Sprite Editor window class is internal to com.unity.2d.sprite; its menu item opens it on the current selection,
+        /// and it finds <see cref="JxlImporter"/> as the data provider through the asset's importer.
+        /// </summary>
+        internal static bool OpenSpriteEditor(string assetPath)
+        {
+            var asset = AssetDatabase.LoadMainAssetAtPath(assetPath);
+            if (asset == null)
+                return false;
+            Selection.activeObject = asset;
+            return EditorApplication.ExecuteMenuItem("Window/2D/Sprite Editor");
+        }
+#endif
 
         // ------------------------------------------------------------------ advanced
 

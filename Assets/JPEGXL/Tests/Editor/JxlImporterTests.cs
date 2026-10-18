@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using JpegXL.Editor;
 using NUnit.Framework;
@@ -10,14 +11,15 @@ namespace JpegXL.Tests
 {
     public class JxlImporterTests
     {
-        const string SdrDir = "Assets/JPEGXL/Tests/Samples/SDR/";
-        const string HdrDir = "Assets/JPEGXL/Tests/Samples/HDR/";
-        const string RealDir = "Assets/JPEGXL/Tests/Samples/Real/";
+        internal const string SamplesDir = "Assets/JPEGXL/Tests/Samples/";
+        internal const string SdrDir = SamplesDir + "SDR/";
+        internal const string HdrDir = SamplesDir + "HDR/";
+        internal const string RealDir = SamplesDir + "Real/";
 
         const string Merry = SdrDir + "merry_jxl_mas.jxl";
         const string HardwareAlpha = SdrDir + "hardware_alpha_4k.jxl";
-        const string Sun = SdrDir + "sun_in_the_sky_lossy.jxl";
-        const string Bt2111Pq = HdrDir + "bt2111_test_pattern_pq.jxl";
+        internal const string Sun = SdrDir + "sun_in_the_sky_lossy.jxl";
+        internal const string Bt2111Pq = HdrDir + "bt2111_test_pattern_pq.jxl";
         const string HdrTestPq = HdrDir + "hdr_test_image_pq.jxl";
         const string HeatHlg = HdrDir + "heat_hlg.jxl";
 
@@ -280,7 +282,7 @@ namespace JpegXL.Tests
 
         // ---------------------------------------------------------------- helpers
 
-        static JxlImporter GetImporter(string path)
+        internal static JxlImporter GetImporter(string path)
         {
             var importer = AssetImporter.GetAtPath(path) as JxlImporter;
             Assert.IsNotNull(importer, $"{path} is not imported by JxlImporter.");
@@ -291,7 +293,7 @@ namespace JpegXL.Tests
         /// Applies <paramref name="change"/> to a freshly fetched importer and reimports. The importer instance is
         /// replaced by a reimport, so callers must not keep references across calls.
         /// </summary>
-        static void Reimport(string path, Action<JxlImporter> change)
+        internal static void Reimport(string path, Action<JxlImporter> change)
         {
             JxlImporter importer = GetImporter(path);
             change(importer);
@@ -300,7 +302,7 @@ namespace JpegXL.Tests
         }
 
         /// <summary>Puts every setting back to the importer defaults so test order does not matter.</summary>
-        static void RestoreDefaults(string path)
+        internal static void RestoreDefaults(string path)
         {
             if (!(AssetImporter.GetAtPath(path) is JxlImporter))
                 return;
@@ -315,6 +317,7 @@ namespace JpegXL.Tests
                 importer.hdrReferenceWhiteNits = 203f;
                 importer.hdrPrimaries = JxlHdrPrimaries.SRgb;
                 importer.hdrClampNegative = true;
+                importer.spriteSheet = new List<JxlSpriteRect>();
             });
         }
 
@@ -323,7 +326,7 @@ namespace JpegXL.Tests
         const string PqPatches = HdrDir + "pq_patches_rec2100.jxl";   // 64x8, patches of 0,1,10,100,203,1000,4000,10000 nits
         const string HlgPatches = HdrDir + "hlg_patches_rec2100.jxl"; // 64x8, scene-linear 0,.01,.1,.25,.5,.75,1,1
 
-        static void MakeReadableUncompressed(JxlImporter importer)
+        internal static void MakeReadableUncompressed(JxlImporter importer)
         {
             importer.textureSettings.readable = true;
             importer.textureSettings.npotScale = TextureImporterNPOTScale.None;
@@ -464,7 +467,7 @@ namespace JpegXL.Tests
 
         // Pixels of djxl's 8-bit PNG of sun_in_the_sky_lossy.jxl (PNG coordinates, row 0 = top).
         // In the Unity texture (row 0 = bottom) they sit at y = 511 - pngY.
-        static readonly int[][] SunReferencePixels =
+        internal static readonly int[][] SunReferencePixels =
         {
             //          pngX, pngY,   R,   G,   B
             new[] {  10,  10,  67,  73,  98 },

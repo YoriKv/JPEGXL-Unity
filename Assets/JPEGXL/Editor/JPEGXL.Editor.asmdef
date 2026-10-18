@@ -1,7 +1,9 @@
 {
     "name": "JPEGXL.Editor",
     "rootNamespace": "JpegXL.Editor",
-    "references": [],
+    "references": [
+        "Unity.2D.Sprite.Editor"
+    ],
     "includePlatforms": [
         "Editor"
     ],
@@ -11,6 +13,12 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [],
-    "versionDefines": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.2d.sprite",
+            "expression": "1.0.0",
+            "define": "JXL_2D_SPRITE"
+        }
+    ],
     "noEngineReferences": false
 }

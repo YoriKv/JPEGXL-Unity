@@ -4,7 +4,8 @@
     "references": [
         "JPEGXL.Editor",
         "UnityEngine.TestRunner",
-        "UnityEditor.TestRunner"
+        "UnityEditor.TestRunner",
+        "Unity.2D.Sprite.Editor"
     ],
     "includePlatforms": [
         "Editor"
@@ -19,6 +20,12 @@
     "defineConstraints": [
         "UNITY_INCLUDE_TESTS"
     ],
-    "versionDefines": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.2d.sprite",
+            "expression": "1.0.0",
+            "define": "JXL_2D_SPRITE"
+        }
+    ],
     "noEngineReferences": false
 }

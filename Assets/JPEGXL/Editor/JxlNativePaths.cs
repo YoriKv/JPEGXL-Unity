@@ -1,5 +1,6 @@
 using System.IO;
 using UnityEditor;
+using UnityEngine;
 
 namespace JpegXL.Editor
 {
@@ -13,9 +14,14 @@ namespace JpegXL.Editor
     {
         static JxlNativePaths()
         {
+            // One jxl_threads library per host OS lives under Plugins/Editor; pick the one built for this host.
+            string extension = Application.platform == RuntimePlatform.OSXEditor ? ".dylib"
+                : Application.platform == RuntimePlatform.LinuxEditor ? ".so" : ".dll";
             foreach (string guid in AssetDatabase.FindAssets("jxl_threads"))
             {
                 string path = AssetDatabase.GUIDToAssetPath(guid);
+                if (!path.EndsWith(extension, System.StringComparison.OrdinalIgnoreCase))
+                    continue;
                 if (AssetImporter.GetAtPath(path) is PluginImporter importer && importer.GetCompatibleWithEditor())
                 {
                     Native.JxlNative.NativeLibraryDirectory = Path.GetFullPath(Path.GetDirectoryName(path));

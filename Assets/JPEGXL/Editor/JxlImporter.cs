@@ -10,14 +10,6 @@ using UnityEngine;
 
 namespace JpegXL.Editor
 {
-    /// <summary>
-    /// Imports <c>.jxl</c> files as <see cref="Texture2D"/> assets (plus a <see cref="Sprite"/> sub-asset for the Sprite type).
-    /// Pixels come from the bundled libjxl decoder; the texture itself is built by Unity's own texture import pipeline
-    /// (<see cref="TextureGenerator.GenerateTexture(TextureGenerationSettings, NativeArray{Color32})"/>), so texture types,
-    /// NPOT scaling, mipmaps, compression formats, max size and per-platform overrides behave exactly as for a <c>.jpg</c>.
-    /// SDR files go through the <see cref="Color32"/> overload; HDR files (PQ, HLG or float samples) are decoded to linear
-    /// float and go through the <see cref="Color"/> overload, which yields RGBAHalf (uncompressed) or BC6H (compressed).
-    /// </summary>
     /// <summary>Colour primaries for imported HDR textures.</summary>
     public enum JxlHdrPrimaries
     {
@@ -27,8 +19,36 @@ namespace JpegXL.Editor
         Rec2100
     }
 
+    /// <summary>
+    /// One sprite of a Multiple-mode sprite sheet, the JXL equivalent of <c>SpriteMetaData</c> in a TextureImporter's
+    /// <c>m_SpriteSheet.m_Sprites</c>. <see cref="rect"/> is in source-image pixels with the origin at the bottom-left,
+    /// like TextureImporter; Unity scales it when the imported texture is resized (max size, NPOT).
+    /// </summary>
+    [Serializable]
+    public sealed class JxlSpriteRect
+    {
+        public string name;
+        public Rect rect;
+        public SpriteAlignment alignment = SpriteAlignment.Center;
+        public Vector2 pivot = new Vector2(0.5f, 0.5f);
+        /// <summary>Left, bottom, right, top border in pixels (9-slicing).</summary>
+        public Vector4 border;
+        /// <summary>Stable sprite ID as a GUID string (32 hex digits). Also the sub-asset identifier, so renaming keeps references.</summary>
+        public string spriteID;
+
+        public JxlSpriteRect Clone() => (JxlSpriteRect)MemberwiseClone();
+    }
+
+    /// <summary>
+    /// Imports <c>.jxl</c> files as <see cref="Texture2D"/> assets (plus a <see cref="Sprite"/> sub-asset for the Sprite type).
+    /// Pixels come from the bundled libjxl decoder; the texture itself is built by Unity's own texture import pipeline
+    /// (<see cref="TextureGenerator.GenerateTexture(TextureGenerationSettings, NativeArray{Color32})"/>), so texture types,
+    /// NPOT scaling, mipmaps, compression formats, max size and per-platform overrides behave exactly as for a <c>.jpg</c>.
+    /// SDR files go through the <see cref="Color32"/> overload; HDR files (PQ, HLG or float samples) are decoded to linear
+    /// float and go through the <see cref="Color"/> overload, which yields RGBAHalf (uncompressed) or BC6H (compressed).
+    /// </summary>
     [ScriptedImporter(2, "jxl")]
-    public sealed class JxlImporter : ScriptedImporter
+    public sealed partial class JxlImporter : ScriptedImporter
     {
         /// <summary>Name of the platform settings entry used when no override applies (same as <see cref="TextureImporter"/>).</summary>
         public const string DefaultPlatformName = "DefaultTexturePlatform";
@@ -60,6 +80,9 @@ namespace JpegXL.Editor
 
         [Tooltip("HDR files: clamp negative components (out-of-gamut colours after conversion to sRGB primaries) to 0. BC6H cannot store negative values.")]
         public bool hdrClampNegative = true;
+
+        [Tooltip("Sprite Mode Multiple: the sprites cut from the texture (edited with the Sprite Editor). Rects are in source pixels, origin bottom-left. Single mode ignores this list and uses the pivot and border in Texture Settings.")]
+        public List<JxlSpriteRect> spriteSheet = new List<JxlSpriteRect>();
 
         /// <summary>Texture settings matching what <see cref="TextureImporter"/> uses for a newly imported image of type Default.</summary>
         public static TextureImporterSettings CreateDefaultTextureSettings()
@@ -228,9 +251,11 @@ namespace JpegXL.Editor
 
                 var importSettings = new TextureImporterSettings();
                 (textureSettings ?? CreateDefaultTextureSettings()).CopyTo(importSettings);
-                // Only 2D textures are produced; sprites are always a single full-image sprite.
+                // Only 2D textures are produced. Sprite modes: Single and Multiple (Polygon is not supported and imports as Single).
                 importSettings.textureShape = TextureImporterShape.Texture2D;
-                if (importSettings.textureType == TextureImporterType.Sprite)
+                bool multipleSprites = importSettings.textureType == TextureImporterType.Sprite &&
+                                       importSettings.spriteMode == (int)SpriteImportMode.Multiple;
+                if (importSettings.textureType == TextureImporterType.Sprite && !multipleSprites)
                     importSettings.spriteMode = (int)SpriteImportMode.Single;
                 if (isHdr)
                     importSettings.sRGBTexture = false;
@@ -250,21 +275,32 @@ namespace JpegXL.Editor
                     },
                 };
 
+                // Sub-asset identifiers of the sprites, parallel to settings.spriteImportData.
+                string[] spriteIdentifiers = null;
                 if (importSettings.textureType == TextureImporterType.Sprite)
                 {
-                    settings.spriteImportData = new[]
+                    if (multipleSprites)
                     {
-                        new SpriteImportData
+                        settings.spriteImportData = BuildSheetSprites(ctx, width, height, importSettings.spriteTessellationDetail, out spriteIdentifiers);
+                    }
+                    else
+                    {
+                        settings.spriteImportData = new[]
                         {
-                            name = textureName,
-                            rect = new Rect(0, 0, width, height),
-                            alignment = (SpriteAlignment)importSettings.spriteAlignment,
-                            pivot = importSettings.spritePivot,
-                            border = importSettings.spriteBorder,
-                            tessellationDetail = importSettings.spriteTessellationDetail,
-                            spriteID = StableSpriteId(ctx.assetPath)
-                        }
-                    };
+                            new SpriteImportData
+                            {
+                                name = textureName,
+                                rect = new Rect(0, 0, width, height),
+                                alignment = (SpriteAlignment)importSettings.spriteAlignment,
+                                pivot = importSettings.spritePivot,
+                                border = importSettings.spriteBorder,
+                                tessellationDetail = importSettings.spriteTessellationDetail,
+                                spriteID = StableSpriteId(ctx.assetPath)
+                            }
+                        };
+                        // Single mode keeps the sprite name as its identifier (file ID unchanged from importer v2).
+                        spriteIdentifiers = new[] { textureName };
+                    }
                     settings.qualifyForSpritePacking = true;
                     settings.spritePackingTag = string.Empty;
                 }
@@ -294,10 +330,20 @@ namespace JpegXL.Editor
 
                 if (output.sprites != null)
                 {
-                    foreach (Sprite sprite in output.sprites)
+                    var usedIdentifiers = new HashSet<string>();
+                    for (int i = 0; i < output.sprites.Length; i++)
                     {
-                        if (sprite != null)
-                            ctx.AddObjectToAsset(sprite.name, sprite);
+                        Sprite sprite = output.sprites[i];
+                        if (sprite == null)
+                            continue;
+                        // TextureGenerator returns the sprites in spriteImportData order.
+                        string identifier = spriteIdentifiers != null && i < spriteIdentifiers.Length && output.sprites.Length == spriteIdentifiers.Length
+                            ? spriteIdentifiers[i]
+                            : sprite.name;
+                        string unique = identifier;
+                        for (int n = 1; !usedIdentifiers.Add(unique); n++)
+                            unique = identifier + "_" + n;
+                        ctx.AddObjectToAsset(unique, sprite);
                     }
                 }
             }
@@ -321,15 +367,70 @@ namespace JpegXL.Editor
         }
 
         /// <summary>Sprite IDs must stay stable across reimports; derive one from the asset GUID (falls back to the path).</summary>
-        static string StableSpriteId(string assetPath)
+        internal static string StableSpriteId(string assetPath, string suffix = "/sprite")
         {
             string guid = AssetDatabase.AssetPathToGUID(assetPath);
-            string seed = (string.IsNullOrEmpty(guid) ? assetPath : guid) + "/sprite";
+            string seed = (string.IsNullOrEmpty(guid) ? assetPath : guid) + suffix;
             using (var md5 = MD5.Create())
             {
                 byte[] hash = md5.ComputeHash(Encoding.UTF8.GetBytes(seed));
                 return new GUID(BitConverter.ToString(hash).Replace("-", string.Empty).ToLowerInvariant()).ToString();
             }
+        }
+
+        /// <summary>A valid sprite ID for <paramref name="entry"/>: its own when it parses as a GUID, otherwise one derived from the asset and index.</summary>
+        internal static string ResolveSpriteId(JxlSpriteRect entry, string assetPath, int index)
+        {
+            if (entry != null && !string.IsNullOrEmpty(entry.spriteID) && GUID.TryParse(entry.spriteID, out GUID parsed) && !parsed.Empty())
+                return parsed.ToString();
+            return StableSpriteId(assetPath, "/sheet/" + index + "/" + (entry?.name ?? string.Empty));
+        }
+
+        /// <summary>
+        /// Multiple mode: one <see cref="SpriteImportData"/> per <see cref="spriteSheet"/> entry, in source pixel space (origin
+        /// bottom-left). Rects are clipped to the image; empty ones are skipped with a warning, as TextureImporter does.
+        /// </summary>
+        SpriteImportData[] BuildSheetSprites(AssetImportContext ctx, int width, int height, float tessellationDetail, out string[] identifiers)
+        {
+            var result = new List<SpriteImportData>();
+            var ids = new List<string>();
+            var bounds = new Rect(0, 0, width, height);
+            if (spriteSheet != null)
+            {
+                for (int i = 0; i < spriteSheet.Count; i++)
+                {
+                    JxlSpriteRect entry = spriteSheet[i];
+                    if (entry == null)
+                        continue;
+                    string spriteName = string.IsNullOrEmpty(entry.name) ? Path.GetFileNameWithoutExtension(ctx.assetPath) + "_" + i : entry.name;
+                    Rect r = entry.rect;
+                    float xMin = Mathf.Max(r.xMin, bounds.xMin), yMin = Mathf.Max(r.yMin, bounds.yMin);
+                    float xMax = Mathf.Min(r.xMax, bounds.xMax), yMax = Mathf.Min(r.yMax, bounds.yMax);
+                    if (xMax - xMin < 1f || yMax - yMin < 1f)
+                    {
+                        ctx.LogImportWarning($"JPEG XL import: sprite '{spriteName}' {r} lies outside the {width}x{height} image and was skipped.");
+                        continue;
+                    }
+                    var clipped = Rect.MinMaxRect(xMin, yMin, xMax, yMax);
+                    if (clipped != r)
+                        ctx.LogImportWarning($"JPEG XL import: sprite '{spriteName}' {r} was clipped to the {width}x{height} image.");
+
+                    string id = ResolveSpriteId(entry, ctx.assetPath, i);
+                    result.Add(new SpriteImportData
+                    {
+                        name = spriteName,
+                        rect = clipped,
+                        alignment = entry.alignment,
+                        pivot = entry.pivot,
+                        border = entry.border,
+                        tessellationDetail = tessellationDetail,
+                        spriteID = id
+                    });
+                    ids.Add(id);
+                }
+            }
+            identifiers = ids.ToArray();
+            return result.ToArray();
         }
 
         /// <summary>
