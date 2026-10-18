@@ -364,17 +364,51 @@ namespace JpegXL.Editor.Native
         [DllImport("kernel32", CharSet = CharSet.Ansi, ExactSpelling = true, EntryPoint = "GetProcAddress")]
         private static extern IntPtr GetProcAddress(IntPtr module, string procName);
 
+        // On macOS and Linux the equivalent is dlopen/dlsym. A bare file name only resolves if the
+        // dynamic linker already knows the library by that name, so the editor supplies the plugin
+        // folder through NativeLibraryDirectory (set by JxlNativePaths at editor load).
+
+        /// <summary>Directory containing the libjxl native libraries; used for dlopen on non-Windows hosts.</summary>
+        internal static string NativeLibraryDirectory;
+
+        private const int RTLD_NOW = 2;
+
+        [DllImport("libdl.so.2", EntryPoint = "dlopen")]
+        private static extern IntPtr dlopen_linux(string path, int flags);
+        [DllImport("libdl.so.2", EntryPoint = "dlsym")]
+        private static extern IntPtr dlsym_linux(IntPtr handle, string symbol);
+        [DllImport("libdl.dylib", EntryPoint = "dlopen")]
+        private static extern IntPtr dlopen_mac(string path, int flags);
+        [DllImport("libdl.dylib", EntryPoint = "dlsym")]
+        private static extern IntPtr dlsym_mac(IntPtr handle, string symbol);
+
         /// <returns>Address of JxlThreadParallelRunner, or IntPtr.Zero when it cannot be resolved
-        /// (non-Windows host, module not loaded). Zero means: decode without a runner (single-threaded).</returns>
+        /// (module not loaded, unknown host). Zero means: decode without a runner (single-threaded).</returns>
         internal static IntPtr ResolveThreadRunnerFunction()
         {
-            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                return IntPtr.Zero;
+            const string symbol = "JxlThreadParallelRunner";
+            try
+            {
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    IntPtr module = GetModuleHandleW("jxl_threads.dll");
+                    return module == IntPtr.Zero ? IntPtr.Zero : GetProcAddress(module, symbol);
+                }
 
-            IntPtr module = GetModuleHandleW("jxl_threads.dll");
-            if (module == IntPtr.Zero)
-                return IntPtr.Zero;
-            return GetProcAddress(module, "JxlThreadParallelRunner");
+                bool mac = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
+                string file = mac ? "libjxl_threads.dylib" : "libjxl_threads.so";
+                string path = string.IsNullOrEmpty(NativeLibraryDirectory) ? file : System.IO.Path.Combine(NativeLibraryDirectory, file);
+                IntPtr handle = mac ? dlopen_mac(path, RTLD_NOW) : dlopen_linux(path, RTLD_NOW);
+                if (handle == IntPtr.Zero && path != file)
+                    handle = mac ? dlopen_mac(file, RTLD_NOW) : dlopen_linux(file, RTLD_NOW);
+                if (handle == IntPtr.Zero)
+                    return IntPtr.Zero;
+                return mac ? dlsym_mac(handle, symbol) : dlsym_linux(handle, symbol);
+            }
+            catch (Exception)
+            {
+                return IntPtr.Zero; // DllNotFoundException for libdl variants, or anything else: fall back to single-threaded.
+            }
         }
     }
 }

@@ -4,6 +4,7 @@ using JpegXL.Editor;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.Experimental.Rendering;
 
 namespace JpegXL.Tests
 {
@@ -19,7 +20,19 @@ namespace JpegXL.Tests
         const string HdrTestPq = HdrDir + "hdr_test_image_pq.jxl";
         const string HeatHlg = HdrDir + "heat_hlg.jxl";
 
+        // Imported sizes follow the TextureImporter defaults a .jpg gets: Non-Power of 2 = ToNearest, Max Size = 2048.
+        // 1920x1080 -> 2048x1024; 3840x2160 -> 4096x2048 -> 2048x1024 (max size).
         static readonly object[] AllFixtures =
+        {
+            new object[] { Merry, 2048, 1024 },
+            new object[] { HardwareAlpha, 2048, 1024 },
+            new object[] { Sun, 512, 512 },
+            new object[] { Bt2111Pq, 2048, 1024 },
+            new object[] { HdrTestPq, 1024, 512 },
+            new object[] { HeatHlg, 1024, 1024 },
+        };
+
+        static readonly object[] SourceSizes =
         {
             new object[] { Merry, 1920, 1080 },
             new object[] { HardwareAlpha, 3840, 2160 },
@@ -29,18 +42,17 @@ namespace JpegXL.Tests
             new object[] { HeatHlg, 1024, 1024 },
         };
 
-        // NPOT textures with mipmaps cannot be block compressed by EditorUtility.CompressTexture (phase 2 limitation),
-        // so the 1920x1080 and 3840x2160 fixtures stay uncompressed for now.
+        // Default platform settings (Automatic format, Compressed) on the Standalone target.
         static readonly object[] SdrFormats =
         {
-            new object[] { Merry, TextureFormat.RGBA32 },
-            new object[] { HardwareAlpha, TextureFormat.RGBA32 },
+            new object[] { Merry, TextureFormat.DXT1 },
+            new object[] { HardwareAlpha, TextureFormat.DXT5 },
             new object[] { Sun, TextureFormat.DXT1 },
         };
 
         static readonly object[] HdrFormats =
         {
-            new object[] { Bt2111Pq, TextureFormat.RGBAHalf },
+            new object[] { Bt2111Pq, TextureFormat.BC6H },
             new object[] { HdrTestPq, TextureFormat.BC6H },
             new object[] { HeatHlg, TextureFormat.BC6H },
         };
@@ -63,6 +75,14 @@ namespace JpegXL.Tests
         }
 
         // ---------------------------------------------------------------- b. every fixture imports
+
+        [TestCaseSource(nameof(SourceSizes))]
+        public void ReadInfo_Fixture_HasSourceSize(string path, int width, int height)
+        {
+            JxlImageInfo info = JxlDecoder.ReadInfo(File.ReadAllBytes(path));
+            Assert.AreEqual(width, info.Width, "width");
+            Assert.AreEqual(height, info.Height, "height");
+        }
 
         [TestCaseSource(nameof(AllFixtures))]
         public void Fixture_ImportsAsTexture_WithExpectedSize(string path, int width, int height)
@@ -187,8 +207,8 @@ namespace JpegXL.Tests
         // ---------------------------------------------------------------- f. non-readable textures keep their pixels
 
         /// <summary>
-        /// The importer calls Apply(false, makeNoLongerReadable: true) when Read/Write is off. This proves the
-        /// serialized asset still carries pixel data by sampling the GPU copy through a RenderTexture.
+        /// With Read/Write off the texture has no CPU copy. This proves the serialized asset still carries pixel
+        /// data by sampling the GPU copy through a RenderTexture.
         /// </summary>
         [TestCaseSource(nameof(AllFixtures))]
         public void Fixture_NonReadableTexture_HasPixelsOnGpu(string path, int width, int height)
@@ -237,14 +257,15 @@ namespace JpegXL.Tests
 
             try
             {
-                importer.compression = JxlTextureCompression.None;
-                importer.isReadable = true;
+                importer.defaultPlatformSettings.textureCompression = TextureImporterCompression.Uncompressed;
+                importer.textureSettings.readable = true;
                 EditorUtility.SetDirty(importer);
                 importer.SaveAndReimport();
 
                 var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(Sun);
                 Assert.IsNotNull(tex);
-                Assert.AreEqual(TextureFormat.RGBA32, tex.format);
+                // Opaque source, uncompressed: TextureGenerator picks RGB24, as it does for a .jpg.
+                Assert.AreEqual(TextureFormat.RGB24, tex.format);
                 Assert.IsTrue(tex.isReadable, "isReadable");
 
                 Color c = tex.GetPixel(256, 256);
@@ -252,15 +273,216 @@ namespace JpegXL.Tests
             }
             finally
             {
-                importer = AssetImporter.GetAtPath(Sun) as JxlImporter;
-                if (importer != null)
+                RestoreDefaults(Sun);
+            }
+        }
+
+        // ---------------------------------------------------------------- helpers
+
+        static JxlImporter GetImporter(string path)
+        {
+            var importer = AssetImporter.GetAtPath(path) as JxlImporter;
+            Assert.IsNotNull(importer, $"{path} is not imported by JxlImporter.");
+            return importer;
+        }
+
+        /// <summary>
+        /// Applies <paramref name="change"/> to a freshly fetched importer and reimports. The importer instance is
+        /// replaced by a reimport, so callers must not keep references across calls.
+        /// </summary>
+        static void Reimport(string path, Action<JxlImporter> change)
+        {
+            JxlImporter importer = GetImporter(path);
+            change(importer);
+            EditorUtility.SetDirty(importer);
+            importer.SaveAndReimport();
+        }
+
+        /// <summary>Puts every setting back to the importer defaults so test order does not matter.</summary>
+        static void RestoreDefaults(string path)
+        {
+            if (!(AssetImporter.GetAtPath(path) is JxlImporter))
+                return;
+            Reimport(path, importer =>
+            {
+                importer.textureSettings = JxlImporter.CreateDefaultTextureSettings();
+                importer.defaultPlatformSettings = JxlImporter.CreatePlatformSettings(JxlImporter.DefaultPlatformName);
+                for (int i = 0; i < importer.platformOverrides.Count; i++)
+                    importer.platformOverrides[i] = JxlImporter.CreatePlatformSettings(importer.platformOverrides[i].name);
+                importer.convertToSRGB = true;
+                importer.unpremultiplyAlpha = true;
+            });
+        }
+
+        // ---------------------------------------------------------------- g. orientation and colour
+
+        // Pixels of djxl's 8-bit PNG of sun_in_the_sky_lossy.jxl (PNG coordinates, row 0 = top).
+        // In the Unity texture (row 0 = bottom) they sit at y = 511 - pngY.
+        static readonly int[][] SunReferencePixels =
+        {
+            //          pngX, pngY,   R,   G,   B
+            new[] {  10,  10,  67,  73,  98 },
+            new[] { 100,  40,  88,  87, 102 },
+            new[] { 400, 100, 211, 172, 101 },
+            new[] { 480, 470,  73,  77,  99 },
+            new[] { 256,  20, 153, 132, 108 },
+        };
+
+        [Test]
+        public void Sun_Uncompressed_PixelsMatchReference()
+        {
+            try
+            {
+                Reimport(Sun, importer =>
                 {
-                    // Restore the defaults so other tests see the standard import.
-                    importer.compression = JxlTextureCompression.Normal;
-                    importer.isReadable = false;
-                    EditorUtility.SetDirty(importer);
-                    importer.SaveAndReimport();
+                    importer.textureSettings.readable = true;
+                    importer.defaultPlatformSettings.textureCompression = TextureImporterCompression.Uncompressed;
+                });
+
+                var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(Sun);
+                Assert.IsNotNull(tex);
+                Assert.AreEqual(512, tex.width);
+                Assert.AreEqual(512, tex.height);
+
+                // GetPixel would return sRGB-decoded floats; compare the stored bytes instead.
+                Color32[] pixels = tex.GetPixels32();
+                const int tolerance = 3;
+                foreach (int[] p in SunReferencePixels)
+                {
+                    int x = p[0], unityY = tex.height - 1 - p[1];
+                    Color32 c = pixels[unityY * tex.width + x];
+                    string where = $"PNG ({p[0]},{p[1]}) = Unity ({x},{unityY}): got {c}, expected ({p[2]},{p[3]},{p[4]})";
+                    Assert.LessOrEqual(Math.Abs(c.r - p[2]), tolerance, "R at " + where);
+                    Assert.LessOrEqual(Math.Abs(c.g - p[3]), tolerance, "G at " + where);
+                    Assert.LessOrEqual(Math.Abs(c.b - p[4]), tolerance, "B at " + where);
                 }
+            }
+            finally
+            {
+                RestoreDefaults(Sun);
+            }
+        }
+
+        // ---------------------------------------------------------------- h. HDR keeps a float format when uncompressed
+
+        [Test]
+        public void HdrFixture_Uncompressed_IsRgbaHalf()
+        {
+            try
+            {
+                Reimport(HdrTestPq, importer => importer.defaultPlatformSettings.textureCompression = TextureImporterCompression.Uncompressed);
+
+                var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(HdrTestPq);
+                Assert.IsNotNull(tex);
+                Assert.AreEqual(TextureFormat.RGBAHalf, tex.format);
+                Assert.IsFalse(tex.isDataSRGB, "HDR textures must be linear.");
+            }
+            finally
+            {
+                RestoreDefaults(HdrTestPq);
+            }
+        }
+
+        // ---------------------------------------------------------------- i. Sprite texture type
+
+        [Test]
+        public void Sun_SpriteType_ProducesSpriteSubAsset()
+        {
+            try
+            {
+                Reimport(Sun, importer => importer.textureSettings.textureType = TextureImporterType.Sprite);
+
+                var main = AssetDatabase.LoadMainAssetAtPath(Sun);
+                Assert.IsInstanceOf<Texture2D>(main, "Main asset should stay a Texture2D.");
+
+                var sprite = AssetDatabase.LoadAssetAtPath<Sprite>(Sun);
+                Assert.IsNotNull(sprite, "No Sprite sub-asset.");
+                Assert.AreEqual(512f, sprite.rect.width, "sprite width");
+                Assert.AreEqual(512f, sprite.rect.height, "sprite height");
+                Assert.AreEqual(100f, sprite.pixelsPerUnit, "pixels per unit");
+                Assert.AreSame(main, sprite.texture, "Sprite should reference the imported texture.");
+            }
+            finally
+            {
+                RestoreDefaults(Sun);
+            }
+        }
+
+        // ---------------------------------------------------------------- j. max size
+
+        // ToNearest first rounds 3840x2160 to 4096x2048, then Max Size halves both: 256x128.
+        // With Non-Power of 2 = None the aspect ratio is kept: 256x144.
+        [TestCase(TextureImporterNPOTScale.ToNearest, 256, 128)]
+        [TestCase(TextureImporterNPOTScale.None, 256, 144)]
+        public void HardwareAlpha_MaxSize256_IsDownscaled(TextureImporterNPOTScale npot, int width, int height)
+        {
+            try
+            {
+                Reimport(HardwareAlpha, importer =>
+                {
+                    importer.textureSettings.npotScale = npot;
+                    importer.defaultPlatformSettings.maxTextureSize = 256;
+                });
+
+                var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(HardwareAlpha);
+                Assert.IsNotNull(tex);
+                Assert.AreEqual(width, tex.width, "width");
+                Assert.AreEqual(height, tex.height, "height");
+            }
+            finally
+            {
+                RestoreDefaults(HardwareAlpha);
+            }
+        }
+
+        // ---------------------------------------------------------------- l. per-platform override
+
+        [Test]
+        public void Sun_OverrideForActiveTarget_IsApplied()
+        {
+            string platform = JxlImporter.GetPlatformName(BuildPipeline.GetBuildTargetGroup(EditorUserBuildSettings.activeBuildTarget));
+            try
+            {
+                Reimport(Sun, importer =>
+                {
+                    var entry = importer.platformOverrides.Find(p => p.name == platform);
+                    Assert.IsNotNull(entry, $"No override entry named '{platform}'.");
+                    entry.overridden = true;
+                    entry.maxTextureSize = 128;
+                    entry.textureCompression = TextureImporterCompression.Uncompressed;
+                });
+
+                var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(Sun);
+                Assert.IsNotNull(tex);
+                Assert.AreEqual(128, tex.width, "width");
+                Assert.AreEqual(128, tex.height, "height");
+                Assert.AreEqual(TextureFormat.RGB24, tex.format);
+            }
+            finally
+            {
+                RestoreDefaults(Sun);
+            }
+        }
+
+        // ---------------------------------------------------------------- k. normal map
+
+        [Test]
+        public void Sun_NormalMapType_ImportsCompressed()
+        {
+            try
+            {
+                Reimport(Sun, importer => importer.textureSettings.textureType = TextureImporterType.NormalMap);
+
+                var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(Sun);
+                Assert.IsNotNull(tex);
+                Assert.AreEqual(512, tex.width, "width (a 4x4 texture means the magenta placeholder)");
+                Assert.AreEqual(512, tex.height, "height");
+                Assert.IsTrue(GraphicsFormatUtility.IsCompressedFormat(tex.format), $"Expected a compressed format, got {tex.format}.");
+                Assert.IsFalse(tex.isDataSRGB, "Normal maps must be linear.");
+            }
+            finally
+            {
+                RestoreDefaults(Sun);
             }
         }
     }

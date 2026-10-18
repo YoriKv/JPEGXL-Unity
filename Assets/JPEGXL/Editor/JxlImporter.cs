@@ -1,96 +1,144 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
+using Unity.Collections;
 using UnityEditor;
 using UnityEditor.AssetImporters;
 using UnityEngine;
 
 namespace JpegXL.Editor
 {
-    /// <summary>Where the texture's alpha channel comes from.</summary>
-    public enum JxlAlphaSource
-    {
-        /// <summary>Use the alpha channel stored in the JPEG XL file (opaque when the file has none).</summary>
-        FromInput,
-        /// <summary>Ignore any stored alpha; the texture is fully opaque.</summary>
-        None
-    }
-
-    /// <summary>GPU compression applied to the imported texture.</summary>
-    public enum JxlTextureCompression
-    {
-        /// <summary>Keep the decoded pixels uncompressed (RGBA32, RGBAHalf or RGBAFloat).</summary>
-        None,
-        /// <summary>DXT1/DXT5 for SDR, BC6H (normal quality) for HDR.</summary>
-        Normal,
-        /// <summary>BC7 for SDR, BC6H (best quality) for HDR.</summary>
-        HighQuality
-    }
-
-    /// <summary>Uncompressed texture format used for HDR sources.</summary>
-    public enum JxlHdrPrecision
-    {
-        /// <summary>16-bit float per channel (RGBAHalf).</summary>
-        Half,
-        /// <summary>32-bit float per channel (RGBAFloat).</summary>
-        Float
-    }
-
     /// <summary>
-    /// Imports <c>.jxl</c> files as <see cref="Texture2D"/> assets using the bundled libjxl decoder.
-    /// SDR files become RGBA32 textures (optionally DXT/BC7 compressed); HDR files (PQ, HLG or float samples)
-    /// become linear RGBAHalf/RGBAFloat textures (optionally BC6H compressed).
+    /// Imports <c>.jxl</c> files as <see cref="Texture2D"/> assets (plus a <see cref="Sprite"/> sub-asset for the Sprite type).
+    /// Pixels come from the bundled libjxl decoder; the texture itself is built by Unity's own texture import pipeline
+    /// (<see cref="TextureGenerator.GenerateTexture(TextureGenerationSettings, NativeArray{Color32})"/>), so texture types,
+    /// NPOT scaling, mipmaps, compression formats, max size and per-platform overrides behave exactly as for a <c>.jpg</c>.
+    /// SDR files go through the <see cref="Color32"/> overload; HDR files (PQ, HLG or float samples) are decoded to linear
+    /// float and go through the <see cref="Color"/> overload, which yields RGBAHalf (uncompressed) or BC6H (compressed).
     /// </summary>
-    [ScriptedImporter(1, "jxl")]
+    [ScriptedImporter(2, "jxl")]
     public sealed class JxlImporter : ScriptedImporter
     {
-        // ---- Texture ----
+        /// <summary>Name of the platform settings entry used when no override applies (same as <see cref="TextureImporter"/>).</summary>
+        public const string DefaultPlatformName = "DefaultTexturePlatform";
 
-        [Tooltip("Treat 8-bit output as sRGB-encoded color data. Turn off for data textures such as masks or normal maps. Ignored for HDR files, which are always linear.")]
-        public bool sRGBTexture = true;
+        /// <summary>Platforms that can carry overrides, named like <see cref="TextureImporter"/> platform settings.</summary>
+        public static readonly string[] OverridePlatformNames = { "Standalone", "Android", "iPhone", "WebGL" };
 
-        [Tooltip("Generate a mipmap chain for the texture.")]
-        public bool generateMipMaps = true;
+        [Tooltip("Texture importer settings (type, sRGB, alpha, mipmaps, NPOT, sprite and normal map options, filter and wrap modes).")]
+        public TextureImporterSettings textureSettings = CreateDefaultTextureSettings();
 
-        [Tooltip("Texture filtering mode.")]
-        public FilterMode filterMode = FilterMode.Bilinear;
+        [Tooltip("Platform settings used when no platform override is active.")]
+        public TextureImporterPlatformSettings defaultPlatformSettings = CreatePlatformSettings(DefaultPlatformName);
 
-        [Tooltip("Texture wrap mode.")]
-        public TextureWrapMode wrapMode = TextureWrapMode.Repeat;
-
-        [Tooltip("Anisotropic filtering level (1 = off).")]
-        [Range(1, 16)]
-        public int anisoLevel = 1;
-
-        // ---- Alpha ----
-
-        [Tooltip("Where the alpha channel comes from. None forces the texture to be fully opaque.")]
-        public JxlAlphaSource alphaSource = JxlAlphaSource.FromInput;
-
-        [Tooltip("Mark the texture's alpha as transparency (dilates color into transparent areas for mipmaps and previews).")]
-        public bool alphaIsTransparency = true;
-
-        [Tooltip("Ask the decoder to undo premultiplied alpha when the file stores premultiplied color.")]
-        public bool unpremultiplyAlpha = true;
-
-        // ---- Color ----
+        [Tooltip("Per-platform overrides. An entry applies when its name matches the build target group and 'overridden' is set.")]
+        public List<TextureImporterPlatformSettings> platformOverrides = CreateDefaultOverrides();
 
         [Tooltip("For SDR files whose primaries or transfer function are not sRGB (for example Rec.2100 or P3), convert the pixels to sRGB during decoding. When off the original encoding is kept.")]
         public bool convertToSRGB = true;
 
-        // ---- HDR ----
+        [Tooltip("Ask the decoder to undo premultiplied alpha when the file stores premultiplied color.")]
+        public bool unpremultiplyAlpha = true;
 
-        [Tooltip("Uncompressed texture format used for HDR sources before compression: Half = RGBAHalf, Float = RGBAFloat.")]
-        public JxlHdrPrecision hdrPrecision = JxlHdrPrecision.Half;
+        /// <summary>Texture settings matching what <see cref="TextureImporter"/> uses for a newly imported image of type Default.</summary>
+        public static TextureImporterSettings CreateDefaultTextureSettings()
+        {
+            return new TextureImporterSettings
+            {
+                textureType = TextureImporterType.Default,
+                textureShape = TextureImporterShape.Texture2D,
+                sRGBTexture = true,
+                alphaSource = TextureImporterAlphaSource.FromInput,
+                alphaIsTransparency = false,
+                alphaTestReferenceValue = 0.5f,
+                npotScale = TextureImporterNPOTScale.ToNearest,
+                readable = false,
+                streamingMipmaps = false,
+                streamingMipmapsPriority = 0,
+                mipmapEnabled = true,
+                mipmapFilter = TextureImporterMipFilter.BoxFilter,
+                borderMipmap = false,
+                mipMapsPreserveCoverage = false,
+                fadeOut = false,
+                mipmapFadeDistanceStart = 1,
+                mipmapFadeDistanceEnd = 3,
+                convertToNormalMap = false,
+                heightmapScale = 0.25f,
+                normalMapFilter = TextureImporterNormalFilter.Standard,
+                generateCubemap = TextureImporterGenerateCubemap.AutoCubemap,
+                cubemapConvolution = TextureImporterCubemapConvolution.None,
+                seamlessCubemap = false,
+                spriteMode = (int)SpriteImportMode.Single,
+                spriteExtrude = 1,
+                spriteMeshType = SpriteMeshType.Tight,
+                spriteAlignment = (int)SpriteAlignment.Center,
+                spritePivot = new Vector2(0.5f, 0.5f),
+                spritePixelsPerUnit = 100f,
+                spriteBorder = Vector4.zero,
+                spriteGenerateFallbackPhysicsShape = true,
+                spriteTessellationDetail = -1f,
+                filterMode = FilterMode.Bilinear,
+                aniso = 1,
+                mipmapBias = 0f,
+                wrapModeU = TextureWrapMode.Repeat,
+                wrapModeV = TextureWrapMode.Repeat,
+                wrapModeW = TextureWrapMode.Repeat,
+            };
+        }
 
-        // ---- Compression ----
+        /// <summary>Platform settings with the same defaults as a fresh <see cref="TextureImporter"/>.</summary>
+        public static TextureImporterPlatformSettings CreatePlatformSettings(string name)
+        {
+            return new TextureImporterPlatformSettings
+            {
+                name = name,
+                overridden = false,
+                maxTextureSize = 2048,
+                resizeAlgorithm = TextureResizeAlgorithm.Mitchell,
+                format = TextureImporterFormat.Automatic,
+                textureCompression = TextureImporterCompression.Compressed,
+                crunchedCompression = false,
+                compressionQuality = 50,
+            };
+        }
 
-        [Tooltip("GPU compression. None keeps the decoded pixels. Normal: DXT1 (opaque) / DXT5 (alpha) for SDR, BC6H for HDR. High Quality: BC7 for SDR, BC6H at best quality for HDR. Compression needs width and height to be multiples of 4.")]
-        public JxlTextureCompression compression = JxlTextureCompression.Normal;
+        static List<TextureImporterPlatformSettings> CreateDefaultOverrides()
+        {
+            var list = new List<TextureImporterPlatformSettings>(OverridePlatformNames.Length);
+            foreach (string name in OverridePlatformNames)
+                list.Add(CreatePlatformSettings(name));
+            return list;
+        }
 
-        // ---- Advanced ----
+        /// <summary>Platform settings name <see cref="TextureImporter"/> uses for a build target group.</summary>
+        public static string GetPlatformName(BuildTargetGroup group)
+        {
+            switch (group)
+            {
+                case BuildTargetGroup.Standalone: return "Standalone";
+                case BuildTargetGroup.Android: return "Android";
+                case BuildTargetGroup.iOS: return "iPhone";
+                case BuildTargetGroup.WebGL: return "WebGL";
+                default: return group.ToString();
+            }
+        }
 
-        [Tooltip("Keep a CPU copy of the pixels so scripts can read them (GetPixel, GetPixels). Doubles memory use.")]
-        public bool isReadable = false;
+        /// <summary>The override for <paramref name="target"/> when it is enabled, otherwise <see cref="defaultPlatformSettings"/>.</summary>
+        public TextureImporterPlatformSettings GetEffectivePlatformSettings(BuildTarget target)
+        {
+            string platformName = GetPlatformName(BuildPipeline.GetBuildTargetGroup(target));
+            if (platformOverrides != null)
+            {
+                foreach (var entry in platformOverrides)
+                {
+                    if (entry != null && entry.overridden && entry.name == platformName)
+                        return entry;
+                }
+            }
+            return defaultPlatformSettings ?? CreatePlatformSettings(DefaultPlatformName);
+        }
 
         public override void OnImportAsset(AssetImportContext ctx)
         {
@@ -104,7 +152,8 @@ namespace JpegXL.Editor
                 return;
             }
 
-            Texture2D tex = null;
+            NativeArray<Color32> sdrPixels = default;
+            NativeArray<Color> hdrPixels = default;
             try
             {
                 byte[] data = File.ReadAllBytes(ctx.assetPath);
@@ -123,129 +172,144 @@ namespace JpegXL.Editor
                 {
                     Output = isHdr ? JxlPixelOutput.RgbaFloat : JxlPixelOutput.Rgba8,
                     ColorTarget = colorTarget,
+                    // TextureGenerator expects Unity row order: element 0 is the bottom-left pixel and rows go
+                    // upwards. Verified by JxlImporterTests.Sun_Uncompressed_PixelsMatchReference (pixels compared
+                    // against djxl's PNG with unity_y = height - 1 - png_y).
                     FlipVertically = true,
                     UnpremultiplyAlpha = unpremultiplyAlpha,
                     DesiredIntensityTarget = 0f
                 };
 
                 JxlDecodedImage decoded = JxlDecoder.Decode(data, options);
-
                 JxlImageInfo decodedInfo = decoded.Info ?? info;
                 int width = decodedInfo.Width;
                 int height = decodedInfo.Height;
                 if (width <= 0 || height <= 0)
                     throw new InvalidOperationException($"Decoder returned invalid dimensions {width}x{height}.");
 
-                bool keepAlpha = alphaSource == JxlAlphaSource.FromInput;
-                bool textureHasAlpha = keepAlpha && decodedInfo.HasAlpha;
-
-                tex = isHdr
-                    ? CreateHdrTexture(decoded.Pixels, width, height, keepAlpha)
-                    : CreateSdrTexture(decoded.Pixels, width, height, keepAlpha);
-
-                tex.Apply(generateMipMaps, false);
-
-                if (compression != JxlTextureCompression.None)
+                int pixelCount = width * height;
+                // Persistent rather than Temp: a 4K float image is 130 MB, far beyond the temp allocator's blocks.
+                if (isHdr)
                 {
-                    // EditorUtility.CompressTexture refuses non-multiple-of-4 sizes, and refuses NPOT sizes when the
-                    // texture has mipmaps ("Only POT textures can be compressed to this format if the texture has a mipmap").
-                    bool multipleOf4 = width % 4 == 0 && height % 4 == 0;
-                    bool potIfMips = !generateMipMaps || (Mathf.IsPowerOfTwo(width) && Mathf.IsPowerOfTwo(height));
-                    if (!multipleOf4 || !potIfMips)
-                    {
-                        ctx.LogImportWarning($"JPEG XL import: texture is {width}x{height}; block compression needs multiples of 4 and, with mipmaps, power-of-two sizes, so the texture was left uncompressed.");
-                    }
-                    else
-                    {
-                        TextureFormat target;
-                        if (isHdr)
-                            target = TextureFormat.BC6H;
-                        else if (compression == JxlTextureCompression.HighQuality)
-                            target = TextureFormat.BC7;
-                        else
-                            target = textureHasAlpha ? TextureFormat.DXT5 : TextureFormat.DXT1;
-
-                        TextureCompressionQuality quality = compression == JxlTextureCompression.HighQuality
-                            ? TextureCompressionQuality.Best
-                            : TextureCompressionQuality.Normal;
-
-                        EditorUtility.CompressTexture(tex, target, quality);
-                    }
+                    long expected = (long)pixelCount * 16;
+                    if (decoded.Pixels == null || decoded.Pixels.Length != expected)
+                        throw new InvalidOperationException($"Decoder returned {(decoded.Pixels == null ? 0 : decoded.Pixels.Length)} bytes, expected {expected} for {width}x{height} RGBA float.");
+                    hdrPixels = new NativeArray<Color>(pixelCount, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+                    hdrPixels.Reinterpret<byte>(16).CopyFrom(decoded.Pixels);
+                }
+                else
+                {
+                    long expected = (long)pixelCount * 4;
+                    if (decoded.Pixels == null || decoded.Pixels.Length != expected)
+                        throw new InvalidOperationException($"Decoder returned {(decoded.Pixels == null ? 0 : decoded.Pixels.Length)} bytes, expected {expected} for {width}x{height} RGBA8.");
+                    sdrPixels = new NativeArray<Color32>(pixelCount, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+                    sdrPixels.Reinterpret<byte>(4).CopyFrom(decoded.Pixels);
                 }
 
-                if (!isReadable)
-                    tex.Apply(false, true);
+                var importSettings = new TextureImporterSettings();
+                (textureSettings ?? CreateDefaultTextureSettings()).CopyTo(importSettings);
+                // Only 2D textures are produced; sprites are always a single full-image sprite.
+                importSettings.textureShape = TextureImporterShape.Texture2D;
+                if (importSettings.textureType == TextureImporterType.Sprite)
+                    importSettings.spriteMode = (int)SpriteImportMode.Single;
+                if (isHdr)
+                    importSettings.sRGBTexture = false;
 
-                tex.filterMode = filterMode;
-                tex.wrapMode = wrapMode;
-                tex.anisoLevel = Mathf.Clamp(anisoLevel, 1, 16);
-                tex.alphaIsTransparency = alphaIsTransparency;
+                var settings = new TextureGenerationSettings(importSettings.textureType)
+                {
+                    assetPath = ctx.assetPath,
+                    enablePostProcessor = true,
+                    textureImporterSettings = importSettings,
+                    platformSettings = GetEffectivePlatformSettings(ctx.selectedBuildTarget),
+                    sourceTextureInformation = new SourceTextureInformation
+                    {
+                        width = width,
+                        height = height,
+                        containsAlpha = decodedInfo.HasAlpha,
+                        hdr = isHdr
+                    },
+                };
+
+                if (importSettings.textureType == TextureImporterType.Sprite)
+                {
+                    settings.spriteImportData = new[]
+                    {
+                        new SpriteImportData
+                        {
+                            name = textureName,
+                            rect = new Rect(0, 0, width, height),
+                            alignment = (SpriteAlignment)importSettings.spriteAlignment,
+                            pivot = importSettings.spritePivot,
+                            border = importSettings.spriteBorder,
+                            tessellationDetail = importSettings.spriteTessellationDetail,
+                            spriteID = StableSpriteId(ctx.assetPath)
+                        }
+                    };
+                    settings.qualifyForSpritePacking = true;
+                    settings.spritePackingTag = string.Empty;
+                }
+
+                TextureGenerationOutput output = isHdr
+                    ? TextureGenerator.GenerateTexture(settings, hdrPixels)
+                    : TextureGenerator.GenerateTexture(settings, sdrPixels);
+
+                if (output.importWarnings != null)
+                {
+                    foreach (string warning in output.importWarnings)
+                    {
+                        if (!string.IsNullOrWhiteSpace(warning))
+                            ctx.LogImportWarning($"JPEG XL import: {warning.Trim()}");
+                    }
+                }
+                if (!string.IsNullOrWhiteSpace(output.importInspectorWarnings))
+                    ctx.LogImportWarning($"JPEG XL import: {output.importInspectorWarnings.Trim()}");
+
+                Texture2D tex = output.texture;
+                if (tex == null)
+                    throw new InvalidOperationException("TextureGenerator did not produce a texture.");
+
                 tex.name = textureName;
-
-                ctx.AddObjectToAsset("texture", tex, tex);
+                ctx.AddObjectToAsset("texture", tex, output.thumbNail != null ? output.thumbNail : tex);
                 ctx.SetMainObject(tex);
+
+                if (output.sprites != null)
+                {
+                    foreach (Sprite sprite in output.sprites)
+                    {
+                        if (sprite != null)
+                            ctx.AddObjectToAsset(sprite.name, sprite);
+                    }
+                }
             }
             catch (JxlDecodeException e)
             {
-                DestroyPartial(tex);
                 ctx.LogImportError($"JPEG XL decode failed for '{ctx.assetPath}': {e.Message}");
                 AddPlaceholder(ctx, textureName);
             }
             catch (Exception e)
             {
-                DestroyPartial(tex);
                 ctx.LogImportError($"JPEG XL import failed for '{ctx.assetPath}': {e.GetType().Name}: {e.Message}");
                 AddPlaceholder(ctx, textureName);
             }
+            finally
+            {
+                if (sdrPixels.IsCreated)
+                    sdrPixels.Dispose();
+                if (hdrPixels.IsCreated)
+                    hdrPixels.Dispose();
+            }
         }
 
-        Texture2D CreateSdrTexture(byte[] pixels, int width, int height, bool keepAlpha)
+        /// <summary>Sprite IDs must stay stable across reimports; derive one from the asset GUID (falls back to the path).</summary>
+        static string StableSpriteId(string assetPath)
         {
-            int expected = width * height * 4;
-            if (pixels == null || pixels.Length != expected)
-                throw new InvalidOperationException($"Decoder returned {(pixels == null ? 0 : pixels.Length)} bytes, expected {expected} for {width}x{height} RGBA8.");
-
-            if (!keepAlpha)
+            string guid = AssetDatabase.AssetPathToGUID(assetPath);
+            string seed = (string.IsNullOrEmpty(guid) ? assetPath : guid) + "/sprite";
+            using (var md5 = MD5.Create())
             {
-                for (int i = 3; i < pixels.Length; i += 4)
-                    pixels[i] = 255;
+                byte[] hash = md5.ComputeHash(Encoding.UTF8.GetBytes(seed));
+                return new GUID(BitConverter.ToString(hash).Replace("-", string.Empty).ToLowerInvariant()).ToString();
             }
-
-            var tex = new Texture2D(width, height, TextureFormat.RGBA32, generateMipMaps, !sRGBTexture);
-            tex.SetPixelData(pixels, 0);
-            return tex;
-        }
-
-        Texture2D CreateHdrTexture(byte[] pixels, int width, int height, bool keepAlpha)
-        {
-            int floatCount = width * height * 4;
-            int expected = floatCount * sizeof(float);
-            if (pixels == null || pixels.Length != expected)
-                throw new InvalidOperationException($"Decoder returned {(pixels == null ? 0 : pixels.Length)} bytes, expected {expected} for {width}x{height} RGBA float.");
-
-            var floats = new float[floatCount];
-            Buffer.BlockCopy(pixels, 0, floats, 0, expected);
-
-            if (!keepAlpha)
-            {
-                for (int i = 3; i < floats.Length; i += 4)
-                    floats[i] = 1f;
-            }
-
-            if (hdrPrecision == JxlHdrPrecision.Float)
-            {
-                var texFloat = new Texture2D(width, height, TextureFormat.RGBAFloat, generateMipMaps, true);
-                texFloat.SetPixelData(floats, 0);
-                return texFloat;
-            }
-
-            var halves = new ushort[floatCount];
-            for (int i = 0; i < floatCount; i++)
-                halves[i] = Mathf.FloatToHalf(floats[i]);
-
-            var texHalf = new Texture2D(width, height, TextureFormat.RGBAHalf, generateMipMaps, true);
-            texHalf.SetPixelData(halves, 0);
-            return texHalf;
         }
 
         static void AddPlaceholder(AssetImportContext ctx, string textureName)
@@ -259,12 +323,6 @@ namespace JpegXL.Editor
             tex.name = textureName;
             ctx.AddObjectToAsset("texture", tex, tex);
             ctx.SetMainObject(tex);
-        }
-
-        static void DestroyPartial(Texture2D tex)
-        {
-            if (tex != null)
-                UnityEngine.Object.DestroyImmediate(tex);
         }
     }
 }
