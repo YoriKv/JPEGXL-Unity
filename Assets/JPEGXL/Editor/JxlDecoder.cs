@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 namespace JpegXL.Editor
 {
     /// <summary>Pixel layout of <see cref="JxlDecodedImage.Pixels"/>. Always 4 channels RGBA.</summary>
-    public enum JxlPixelOutput
+    internal enum JxlPixelOutput
     {
         /// <summary>1 byte per channel.</summary>
         Rgba8,
@@ -13,7 +13,7 @@ namespace JpegXL.Editor
     }
 
     /// <summary>Colour space the decoder should output.</summary>
-    public enum JxlColorTarget
+    internal enum JxlColorTarget
     {
         /// <summary>Whatever libjxl outputs by default (the image's own colour space where possible).</summary>
         Original,
@@ -25,11 +25,14 @@ namespace JpegXL.Editor
         LinearRec2100,
     }
 
-    public enum JxlTransfer { Unknown, SRgb, Linear, PQ, HLG, Gamma, BT709, DCI, Icc }
+    /// <summary>Transfer function of the source image. <see cref="Icc"/>: only an ICC profile is available.</summary>
+    internal enum JxlTransfer { Unknown, SRgb, Linear, PQ, HLG, Gamma, BT709, DCI, Icc }
 
-    public enum JxlPrimaries { Unknown, SRgb, Rec2100, P3, Custom, Icc }
+    /// <summary>Colour primaries of the source image. <see cref="Icc"/>: only an ICC profile is available.</summary>
+    internal enum JxlPrimaries { Unknown, SRgb, Rec2100, P3, Custom, Icc }
 
-    public struct JxlDecodeOptions
+    /// <summary>How <see cref="JxlDecoder.Decode"/> lays out and converts its output.</summary>
+    internal struct JxlDecodeOptions
     {
         public JxlPixelOutput Output;
         public JxlColorTarget ColorTarget;
@@ -50,7 +53,8 @@ namespace JpegXL.Editor
         };
     }
 
-    public sealed class JxlImageInfo
+    /// <summary>Header facts of a JPEG XL file (<see cref="JxlDecoder.ReadInfo"/>).</summary>
+    internal sealed class JxlImageInfo
     {
         /// <summary>Width after orientation has been applied (libjxl applies orientation).</summary>
         public int Width { get; set; }
@@ -83,7 +87,8 @@ namespace JpegXL.Editor
         public bool IsWideGamut => Primaries != JxlPrimaries.SRgb && Primaries != JxlPrimaries.Unknown;
     }
 
-    public sealed class JxlDecodedImage
+    /// <summary>Result of <see cref="JxlDecoder.Decode"/>.</summary>
+    internal sealed class JxlDecodedImage
     {
         public JxlImageInfo Info { get; set; }
         public JxlPixelOutput Format { get; set; }
@@ -96,14 +101,15 @@ namespace JpegXL.Editor
         public byte[] Pixels { get; set; }
     }
 
-    public sealed class JxlDecodeException : Exception
+    /// <summary>The file could not be decoded, or the native decoder is unavailable.</summary>
+    internal sealed class JxlDecodeException : Exception
     {
         public JxlDecodeException(string message) : base(message) { }
         public JxlDecodeException(string message, Exception inner) : base(message, inner) { }
     }
 
     /// <summary>Safe wrapper over libjxl 0.12. Thread-safe: every call uses its own native decoder.</summary>
-    public static class JxlDecoder
+    internal static class JxlDecoder
     {
         private const uint ExpectedMinor = 12;
 
@@ -111,7 +117,6 @@ namespace JpegXL.Editor
         private const int EventColorEncoding = (int)Native.JxlDecoderStatus.JXL_DEC_COLOR_ENCODING;
         private const int EventFullImage = (int)Native.JxlDecoderStatus.JXL_DEC_FULL_IMAGE;
 
-        private static readonly string s_unavailableReason;
         private static readonly IntPtr s_threadRunnerFn;
         private static readonly UIntPtr s_defaultThreads;
 
@@ -122,7 +127,7 @@ namespace JpegXL.Editor
         public static string NativeVersion { get; }
 
         /// <summary>Why <see cref="IsAvailable"/> is false; null when available.</summary>
-        public static string UnavailableReason => s_unavailableReason;
+        public static string UnavailableReason { get; }
 
         /// <summary>True when libjxl's thread parallel runner could be resolved; otherwise decoding is single-threaded.</summary>
         public static bool IsMultithreaded => s_threadRunnerFn != IntPtr.Zero;
@@ -141,9 +146,8 @@ namespace JpegXL.Editor
                 // The ABI pin: 0.12.x only. JxlBasicInfo and friends are layout-sensitive.
                 if (version / 1000u != ExpectedMinor)
                 {
-                    s_unavailableReason = "libjxl version " + NativeVersion + " (" + version +
+                    UnavailableReason = "libjxl version " + NativeVersion + " (" + version +
                                           ") is not supported; these bindings are for 0.12.x. Replace the DLLs or update the bindings.";
-                    IsAvailable = false;
                     return;
                 }
 
@@ -156,24 +160,20 @@ namespace JpegXL.Editor
                 s_threadRunnerFn = Native.JxlNative.ResolveThreadRunnerFunction();
 
                 IsAvailable = true;
-                s_unavailableReason = null;
             }
             catch (DllNotFoundException e)
             {
-                IsAvailable = false;
-                s_unavailableReason = "Native library '" + stage + "' could not be loaded (" + e.Message +
-                                      "). Expected under Assets/JPEGXL/Plugins/Editor/x86_64 with an editor-only import setting.";
+                UnavailableReason = "Native library '" + stage + "' could not be loaded (" + e.Message +
+                                      "). Expected under Assets/JPEGXL/Plugins/Editor with an editor-only import setting for this host.";
             }
             catch (EntryPointNotFoundException e)
             {
-                IsAvailable = false;
-                s_unavailableReason = "Native library '" + stage + "' is missing an expected export (" + e.Message +
+                UnavailableReason = "Native library '" + stage + "' is missing an expected export (" + e.Message +
                                       "). The DLLs do not match the libjxl 0.12 bindings.";
             }
             catch (Exception e)
             {
-                IsAvailable = false;
-                s_unavailableReason = "Native library '" + stage + "' failed to initialise: " + e.GetType().Name + ": " + e.Message;
+                UnavailableReason = "Native library '" + stage + "' failed to initialise: " + e.GetType().Name + ": " + e.Message;
             }
         }
 
@@ -183,16 +183,9 @@ namespace JpegXL.Editor
             EnsureAvailable();
             ValidateInput(data);
 
-            IntPtr dec = IntPtr.Zero;
+            IntPtr dec = CreateDecoder(EventBasicInfo | EventColorEncoding);
             try
             {
-                dec = Native.JxlNative.JxlDecoderCreate(IntPtr.Zero);
-                if (dec == IntPtr.Zero)
-                    throw new JxlDecodeException("JxlDecoderCreate failed.");
-
-                Check(Native.JxlNative.JxlDecoderSubscribeEvents(dec, EventBasicInfo | EventColorEncoding), "JxlDecoderSubscribeEvents");
-                Check(Native.JxlNative.JxlDecoderSetKeepOrientation(dec, Native.JxlNative.JXL_FALSE), "JxlDecoderSetKeepOrientation");
-
                 fixed (byte* input = data)
                 {
                     Check(Native.JxlNative.JxlDecoderSetInput(dec, input, (UIntPtr)(ulong)data.Length), "JxlDecoderSetInput");
@@ -227,13 +220,9 @@ namespace JpegXL.Editor
             }
             finally
             {
-                if (dec != IntPtr.Zero)
-                    Native.JxlNative.JxlDecoderDestroy(dec);
+                Native.JxlNative.JxlDecoderDestroy(dec);
             }
         }
-
-        /// <summary>Decodes the first frame with <see cref="JxlDecodeOptions.Default"/>.</summary>
-        public static JxlDecodedImage Decode(byte[] data) => Decode(data, JxlDecodeOptions.Default);
 
         /// <summary>Decodes the first frame (animations: first displayed frame) to 4-channel RGBA.</summary>
         public static unsafe JxlDecodedImage Decode(byte[] data, JxlDecodeOptions options)
@@ -261,10 +250,7 @@ namespace JpegXL.Editor
 
             try
             {
-                dec = Native.JxlNative.JxlDecoderCreate(IntPtr.Zero);
-                if (dec == IntPtr.Zero)
-                    throw new JxlDecodeException("JxlDecoderCreate failed.");
-
+                dec = CreateDecoder(EventBasicInfo | EventColorEncoding | EventFullImage);
                 if (s_threadRunnerFn != IntPtr.Zero)
                 {
                     runner = Native.JxlNative.JxlThreadParallelRunnerCreate(IntPtr.Zero, s_defaultThreads);
@@ -273,8 +259,6 @@ namespace JpegXL.Editor
                     Check(Native.JxlNative.JxlDecoderSetParallelRunner(dec, s_threadRunnerFn, runner), "JxlDecoderSetParallelRunner");
                 }
 
-                Check(Native.JxlNative.JxlDecoderSubscribeEvents(dec, EventBasicInfo | EventColorEncoding | EventFullImage), "JxlDecoderSubscribeEvents");
-                Check(Native.JxlNative.JxlDecoderSetKeepOrientation(dec, Native.JxlNative.JXL_FALSE), "JxlDecoderSetKeepOrientation");
                 Check(Native.JxlNative.JxlDecoderSetUnpremultiplyAlpha(dec,
                         options.UnpremultiplyAlpha ? Native.JxlNative.JXL_TRUE : Native.JxlNative.JXL_FALSE),
                     "JxlDecoderSetUnpremultiplyAlpha");
@@ -371,7 +355,7 @@ namespace JpegXL.Editor
         private static void EnsureAvailable()
         {
             if (!IsAvailable)
-                throw new JxlDecodeException("JPEG XL decoder unavailable: " + s_unavailableReason);
+                throw new JxlDecodeException("JPEG XL decoder unavailable: " + UnavailableReason);
         }
 
         private static void ValidateInput(byte[] data)
@@ -380,6 +364,25 @@ namespace JpegXL.Editor
                 throw new ArgumentNullException(nameof(data));
             if (data.Length == 0)
                 throw new JxlDecodeException("Input is empty.");
+        }
+
+        /// <summary>A native decoder subscribed to <paramref name="events"/> that applies the file's orientation. The caller destroys it.</summary>
+        private static IntPtr CreateDecoder(int events)
+        {
+            IntPtr dec = Native.JxlNative.JxlDecoderCreate(IntPtr.Zero);
+            if (dec == IntPtr.Zero)
+                throw new JxlDecodeException("JxlDecoderCreate failed.");
+            try
+            {
+                Check(Native.JxlNative.JxlDecoderSubscribeEvents(dec, events), "JxlDecoderSubscribeEvents");
+                Check(Native.JxlNative.JxlDecoderSetKeepOrientation(dec, Native.JxlNative.JXL_FALSE), "JxlDecoderSetKeepOrientation");
+                return dec;
+            }
+            catch
+            {
+                Native.JxlNative.JxlDecoderDestroy(dec);
+                throw;
+            }
         }
 
         private static void Check(Native.JxlDecoderStatus status, string call)

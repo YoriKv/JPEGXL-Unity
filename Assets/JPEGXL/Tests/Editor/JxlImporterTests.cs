@@ -1,25 +1,18 @@
-using System;
-using System.Collections.Generic;
 using System.IO;
 using JpegXL.Editor;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.Experimental.Rendering;
+using static JpegXL.Tests.JxlTestUtil;
 
 namespace JpegXL.Tests
 {
+    /// <summary>Decoder, default imports of the SDR/HDR fixtures, settings round trips, HDR scaling and primaries.</summary>
     public class JxlImporterTests
     {
-        internal const string SamplesDir = "Assets/JPEGXL/Tests/Samples/";
-        internal const string SdrDir = SamplesDir + "SDR/";
-        internal const string HdrDir = SamplesDir + "HDR/";
-        internal const string RealDir = SamplesDir + "Real/";
-
         const string Merry = SdrDir + "merry_jxl_mas.jxl";
         const string HardwareAlpha = SdrDir + "hardware_alpha_4k.jxl";
-        internal const string Sun = SdrDir + "sun_in_the_sky_lossy.jxl";
-        internal const string Bt2111Pq = HdrDir + "bt2111_test_pattern_pq.jxl";
         const string HdrTestPq = HdrDir + "hdr_test_image_pq.jxl";
         const string HeatHlg = HdrDir + "heat_hlg.jxl";
 
@@ -60,11 +53,12 @@ namespace JpegXL.Tests
             new object[] { HeatHlg, TextureFormat.BC6H },
         };
 
+        // Transfer as a name: JxlTransfer is internal and cannot appear in a public test signature.
         static readonly object[] HdrTransfers =
         {
-            new object[] { Bt2111Pq, JxlTransfer.PQ },
-            new object[] { HdrTestPq, JxlTransfer.PQ },
-            new object[] { HeatHlg, JxlTransfer.HLG },
+            new object[] { Bt2111Pq, nameof(JxlTransfer.PQ) },
+            new object[] { HdrTestPq, nameof(JxlTransfer.PQ) },
+            new object[] { HeatHlg, nameof(JxlTransfer.HLG) },
         };
 
         // ---------------------------------------------------------------- a. native library
@@ -125,16 +119,7 @@ namespace JpegXL.Tests
         [Test]
         public void Decode_HardwareAlpha_Rgba8_HasFullAlphaRange()
         {
-            byte[] data = File.ReadAllBytes(HardwareAlpha);
-            var options = new JxlDecodeOptions
-            {
-                Output = JxlPixelOutput.Rgba8,
-                ColorTarget = JxlColorTarget.Original,
-                FlipVertically = true,
-                UnpremultiplyAlpha = false,
-                DesiredIntensityTarget = 0f
-            };
-            JxlDecodedImage image = JxlDecoder.Decode(data, options);
+            JxlDecodedImage image = JxlDecoder.Decode(File.ReadAllBytes(HardwareAlpha), JxlDecodeOptions.Default);
 
             Assert.IsNotNull(image);
             Assert.IsNotNull(image.Info);
@@ -168,32 +153,26 @@ namespace JpegXL.Tests
         }
 
         [TestCaseSource(nameof(HdrTransfers))]
-        public void Decode_HdrFixture_LinearFloat_IsFiniteAndNonBlack(string path, JxlTransfer transfer)
+        public void Decode_HdrFixture_LinearFloat_IsFiniteAndNonBlack(string path, string transfer)
         {
             byte[] data = File.ReadAllBytes(path);
 
             JxlImageInfo info = JxlDecoder.ReadInfo(data);
             Assert.IsTrue(info.IsHdr, "IsHdr");
-            Assert.AreEqual(transfer, info.Transfer);
+            Assert.AreEqual(transfer, info.Transfer.ToString());
 
-            var options = new JxlDecodeOptions
-            {
-                Output = JxlPixelOutput.RgbaFloat,
-                ColorTarget = JxlColorTarget.LinearSRgb,
-                FlipVertically = true,
-                UnpremultiplyAlpha = false,
-                DesiredIntensityTarget = 0f
-            };
+            JxlDecodeOptions options = JxlDecodeOptions.Default;
+            options.Output = JxlPixelOutput.RgbaFloat;
+            options.ColorTarget = JxlColorTarget.LinearSRgb;
             JxlDecodedImage image = JxlDecoder.Decode(data, options);
 
             Assert.IsNotNull(image);
             Assert.IsTrue(image.Info.IsHdr, "decoded Info.IsHdr");
-            Assert.AreEqual(transfer, image.Info.Transfer);
+            Assert.AreEqual(transfer, image.Info.Transfer.ToString());
             int w = image.Info.Width, h = image.Info.Height;
             Assert.AreEqual(w * h * 16, image.Pixels.Length);
 
-            var floats = new float[w * h * 4];
-            Buffer.BlockCopy(image.Pixels, 0, floats, 0, image.Pixels.Length);
+            float[] floats = ToFloats(image.Pixels);
 
             bool anyPositive = false;
             for (int i = 0; i < floats.Length; i++)
@@ -280,59 +259,10 @@ namespace JpegXL.Tests
             }
         }
 
-        // ---------------------------------------------------------------- helpers
-
-        internal static JxlImporter GetImporter(string path)
-        {
-            var importer = AssetImporter.GetAtPath(path) as JxlImporter;
-            Assert.IsNotNull(importer, $"{path} is not imported by JxlImporter.");
-            return importer;
-        }
-
-        /// <summary>
-        /// Applies <paramref name="change"/> to a freshly fetched importer and reimports. The importer instance is
-        /// replaced by a reimport, so callers must not keep references across calls.
-        /// </summary>
-        internal static void Reimport(string path, Action<JxlImporter> change)
-        {
-            JxlImporter importer = GetImporter(path);
-            change(importer);
-            EditorUtility.SetDirty(importer);
-            importer.SaveAndReimport();
-        }
-
-        /// <summary>Puts every setting back to the importer defaults so test order does not matter.</summary>
-        internal static void RestoreDefaults(string path)
-        {
-            if (!(AssetImporter.GetAtPath(path) is JxlImporter))
-                return;
-            Reimport(path, importer =>
-            {
-                importer.textureSettings = JxlImporter.CreateDefaultTextureSettings();
-                importer.defaultPlatformSettings = JxlImporter.CreatePlatformSettings(JxlImporter.DefaultPlatformName);
-                for (int i = 0; i < importer.platformOverrides.Count; i++)
-                    importer.platformOverrides[i] = JxlImporter.CreatePlatformSettings(importer.platformOverrides[i].name);
-                importer.convertToSRGB = true;
-                importer.unpremultiplyAlpha = true;
-                importer.hdrReferenceWhiteNits = 203f;
-                importer.hdrPrimaries = JxlHdrPrimaries.SRgb;
-                importer.hdrClampNegative = true;
-                importer.spriteSheet = new List<JxlSpriteRect>();
-            });
-        }
-
-        // ---------------------------------------------------------------- phase 3: HDR scaling and primaries
+        // ---------------------------------------------------------------- HDR scaling and primaries
 
         const string PqPatches = HdrDir + "pq_patches_rec2100.jxl";   // 64x8, patches of 0,1,10,100,203,1000,4000,10000 nits
         const string HlgPatches = HdrDir + "hlg_patches_rec2100.jxl"; // 64x8, scene-linear 0,.01,.1,.25,.5,.75,1,1
-
-        internal static void MakeReadableUncompressed(JxlImporter importer)
-        {
-            importer.textureSettings.readable = true;
-            importer.textureSettings.npotScale = TextureImporterNPOTScale.None;
-            importer.textureSettings.mipmapEnabled = false;
-            importer.defaultPlatformSettings.textureCompression = TextureImporterCompression.Uncompressed;
-        }
 
         static Color Patch(Texture2D tex, int patch) => tex.GetPixel(patch * 8 + 4, 3);
 
@@ -439,11 +369,12 @@ namespace JpegXL.Tests
         [Test]
         public void Decode_Bt2111_LinearRec2100_HasNoLargeNegatives()
         {
-            var options = new JxlDecodeOptions { Output = JxlPixelOutput.RgbaFloat, ColorTarget = JxlColorTarget.LinearRec2100, FlipVertically = true };
+            JxlDecodeOptions options = JxlDecodeOptions.Default;
+            options.Output = JxlPixelOutput.RgbaFloat;
+            options.ColorTarget = JxlColorTarget.LinearRec2100;
             JxlDecodedImage image = JxlDecoder.Decode(File.ReadAllBytes(Bt2111Pq), options);
             Assert.IsTrue(image.IsLinear);
-            var floats = new float[image.Pixels.Length / 4];
-            Buffer.BlockCopy(image.Pixels, 0, floats, 0, image.Pixels.Length);
+            float[] floats = ToFloats(image.Pixels);
             float min = float.MaxValue;
             for (int i = 0; i < floats.Length; i++)
                 if ((i & 3) != 3 && floats[i] < min) min = floats[i];
@@ -465,18 +396,6 @@ namespace JpegXL.Tests
 
         // ---------------------------------------------------------------- g. orientation and colour
 
-        // Pixels of djxl's 8-bit PNG of sun_in_the_sky_lossy.jxl (PNG coordinates, row 0 = top).
-        // In the Unity texture (row 0 = bottom) they sit at y = 511 - pngY.
-        internal static readonly int[][] SunReferencePixels =
-        {
-            //          pngX, pngY,   R,   G,   B
-            new[] {  10,  10,  67,  73,  98 },
-            new[] { 100,  40,  88,  87, 102 },
-            new[] { 400, 100, 211, 172, 101 },
-            new[] { 480, 470,  73,  77,  99 },
-            new[] { 256,  20, 153, 132, 108 },
-        };
-
         [Test]
         public void Sun_Uncompressed_PixelsMatchReference()
         {
@@ -495,15 +414,13 @@ namespace JpegXL.Tests
 
                 // GetPixel would return sRGB-decoded floats; compare the stored bytes instead.
                 Color32[] pixels = tex.GetPixels32();
-                const int tolerance = 3;
                 foreach (int[] p in SunReferencePixels)
                 {
-                    int x = p[0], unityY = tex.height - 1 - p[1];
-                    Color32 c = pixels[unityY * tex.width + x];
-                    string where = $"PNG ({p[0]},{p[1]}) = Unity ({x},{unityY}): got {c}, expected ({p[2]},{p[3]},{p[4]})";
-                    Assert.LessOrEqual(Math.Abs(c.r - p[2]), tolerance, "R at " + where);
-                    Assert.LessOrEqual(Math.Abs(c.g - p[3]), tolerance, "G at " + where);
-                    Assert.LessOrEqual(Math.Abs(c.b - p[4]), tolerance, "B at " + where);
+                    Color32 c = PngPixel(tex, pixels, p[0], p[1]);
+                    string where = $"png ({p[0]},{p[1]}) = Unity ({p[0]},{tex.height - 1 - p[1]})";
+                    AssertChannel(p[2], c.r, 3, "R at " + where);
+                    AssertChannel(p[3], c.g, 3, "G at " + where);
+                    AssertChannel(p[4], c.b, 3, "B at " + where);
                 }
             }
             finally

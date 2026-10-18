@@ -31,13 +31,6 @@ namespace JpegXL.Editor.Native
         JXL_BIG_ENDIAN = 2,
     }
 
-    internal enum JxlBitDepthType : int
-    {
-        JXL_BIT_DEPTH_FROM_PIXEL_FORMAT = 0,
-        JXL_BIT_DEPTH_FROM_CODESTREAM = 1,
-        JXL_BIT_DEPTH_CUSTOM = 2,
-    }
-
     /// <summary>types.h JxlPixelFormat. x64 size 24 (size_t align at offset 16).</summary>
     [StructLayout(LayoutKind.Sequential)]
     internal struct JxlPixelFormat
@@ -46,15 +39,6 @@ namespace JpegXL.Editor.Native
         public JxlDataType data_type;
         public JxlEndianness endianness;
         public UIntPtr align;
-    }
-
-    /// <summary>types.h JxlBitDepth. Size 12.</summary>
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct JxlBitDepth
-    {
-        public JxlBitDepthType type;
-        public uint bits_per_sample;
-        public uint exponent_bits_per_sample;
     }
 
     // ---------------------------------------------------- codestream_header.h
@@ -261,9 +245,6 @@ namespace JpegXL.Editor.Native
         internal static extern IntPtr JxlDecoderCreate(IntPtr memoryManager);
 
         [DllImport(JxlLib, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern void JxlDecoderReset(IntPtr dec);
-
-        [DllImport(JxlLib, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern void JxlDecoderDestroy(IntPtr dec);
 
         [DllImport(JxlLib, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
@@ -299,9 +280,6 @@ namespace JpegXL.Editor.Native
         internal static extern JxlDecoderStatus JxlDecoderGetICCProfileSize(IntPtr dec, JxlColorProfileTarget target, UIntPtr* size);
 
         [DllImport(JxlLib, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern JxlDecoderStatus JxlDecoderGetColorAsICCProfile(IntPtr dec, JxlColorProfileTarget target, byte* iccProfile, UIntPtr size);
-
-        [DllImport(JxlLib, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern JxlDecoderStatus JxlDecoderSetPreferredColorProfile(IntPtr dec, JxlColorEncoding* colorEncoding);
 
         [DllImport(JxlLib, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
@@ -316,9 +294,6 @@ namespace JpegXL.Editor.Native
 
         [DllImport(JxlLib, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern JxlDecoderStatus JxlDecoderSetImageOutBuffer(IntPtr dec, JxlPixelFormat* format, void* buffer, UIntPtr size);
-
-        [DllImport(JxlLib, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern JxlDecoderStatus JxlDecoderSetImageOutBitDepth(IntPtr dec, JxlBitDepth* bitDepth);
 
         // ---- encode.h (colour encoding helpers, exported from jxl.dll)
 
@@ -336,13 +311,6 @@ namespace JpegXL.Editor.Native
 
         // ---- thread_parallel_runner.h (jxl_threads.dll)
 
-        /// <summary>
-        /// The JxlParallelRunner callback itself. Bound so the entry point is verified to exist;
-        /// libjxl needs its native address (see <see cref="ResolveThreadRunnerFunction"/>), never a managed call.
-        /// </summary>
-        [DllImport(JxlThreadsLib, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern int JxlThreadParallelRunner(IntPtr runnerOpaque, IntPtr jpegxlOpaque, IntPtr init, IntPtr func, uint startRange, uint endRange);
-
         /// <param name="memoryManager">const JxlMemoryManager*, IntPtr.Zero for the default allocator.</param>
         [DllImport(JxlThreadsLib, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern IntPtr JxlThreadParallelRunnerCreate(IntPtr memoryManager, UIntPtr numWorkerThreads);
@@ -354,9 +322,9 @@ namespace JpegXL.Editor.Native
         internal static extern UIntPtr JxlThreadParallelRunnerDefaultNumWorkerThreads();
 
         // ---- Resolving the native address of JxlThreadParallelRunner.
-        // JxlDecoderSetParallelRunner wants a C function pointer. .NET Standard 2.1 has no NativeLibrary,
-        // so on Windows ask kernel32 for the export of the already-loaded jxl_threads.dll. Callers must
-        // make a jxl_threads P/Invoke first so Unity has loaded the module.
+        // JxlDecoderSetParallelRunner wants the C function pointer of the runner callback, which is never called
+        // from managed code. .NET Standard 2.1 has no NativeLibrary, so on Windows ask kernel32 for the export of
+        // the already-loaded jxl_threads.dll. Callers must make a jxl_threads P/Invoke first so the module is loaded.
 
         [DllImport("kernel32", CharSet = CharSet.Unicode, ExactSpelling = true, EntryPoint = "GetModuleHandleW")]
         private static extern IntPtr GetModuleHandleW(string moduleName);
@@ -366,10 +334,10 @@ namespace JpegXL.Editor.Native
 
         // On macOS and Linux the equivalent is dlopen/dlsym. A bare file name only resolves if the
         // dynamic linker already knows the library by that name, so the editor supplies the plugin
-        // folder through NativeLibraryDirectory (set by JxlNativePaths at editor load).
+        // folder through NativeLibraryDirectory (set by JxlNativeSetup at editor load).
 
         /// <summary>Directory containing the libjxl native libraries; used for dlopen on non-Windows hosts.</summary>
-        internal static string NativeLibraryDirectory;
+        internal static string NativeLibraryDirectory { get; set; }
 
         private const int RTLD_NOW = 2;
 

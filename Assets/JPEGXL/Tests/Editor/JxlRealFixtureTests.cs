@@ -5,12 +5,12 @@ using JpegXL.Editor;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
-using static JpegXL.Tests.JxlImporterTests;
+using static JpegXL.Tests.JxlTestUtil;
 
 namespace JpegXL.Tests
 {
     /// <summary>
-    /// Phase 4: pixel-level checks on the generated and photographic fixtures in Samples/Real (formulas in SOURCES.md),
+    /// Pixel-level checks on the generated and photographic fixtures in Samples/Real (formulas in SOURCES.md),
     /// importer/decoder consistency for HDR, a decode-everything parity check, and the crunch / single-channel paths.
     /// Coordinates named png (x, y) count rows from the top; Unity textures are bottom-up (unity_y = height - 1 - png_y).
     /// </summary>
@@ -22,14 +22,6 @@ namespace JpegXL.Tests
         const string Odd = RealDir + "odd_123x77_lossy.jxl";
         const string PhotoLossy = RealDir + "photo_lossy.jxl";
         const string PhotoJpeg = RealDir + "photo_jpeg_reconstruct.jxl";
-
-        static Color32 PngPixel(Texture2D tex, Color32[] pixels, int pngX, int pngY) =>
-            pixels[(tex.height - 1 - pngY) * tex.width + pngX];
-
-        static void AssertChannel(int expected, int actual, int tolerance, string what) =>
-            Assert.LessOrEqual(Math.Abs(expected - actual), tolerance, $"{what}: expected {expected}, got {actual}");
-
-        static bool IsPlaceholder(Texture2D tex) => tex.width == 4 && tex.height == 4;
 
         // ---------------------------------------------------------------- a. alpha gradient
 
@@ -252,16 +244,11 @@ namespace JpegXL.Tests
             byte[] data = File.ReadAllBytes(Bt2111Pq);
             JxlImageInfo info = JxlDecoder.ReadInfo(data);
             Assert.AreEqual(10000f, info.IntensityTarget, 1f, "PQ intensity target");
-            var decoded = JxlDecoder.Decode(data, new JxlDecodeOptions
-            {
-                Output = JxlPixelOutput.RgbaFloat,
-                ColorTarget = JxlColorTarget.LinearSRgb,
-                FlipVertically = true,
-                UnpremultiplyAlpha = true,
-                DesiredIntensityTarget = 0f
-            });
-            var floats = new float[decoded.Pixels.Length / 4];
-            Buffer.BlockCopy(decoded.Pixels, 0, floats, 0, decoded.Pixels.Length);
+            JxlDecodeOptions options = JxlDecodeOptions.Default;
+            options.Output = JxlPixelOutput.RgbaFloat;
+            options.ColorTarget = JxlColorTarget.LinearSRgb;
+            options.UnpremultiplyAlpha = true;
+            float[] floats = ToFloats(JxlDecoder.Decode(data, options).Pixels);
             float scale = info.IntensityTarget / 203f;
 
             try
@@ -368,13 +355,13 @@ namespace JpegXL.Tests
                 if (component == TextureImporterSingleChannelComponent.Alpha)
                 {
                     // alpha_gradient: A = x outside the hole.
-                    Color32 c = tex.GetPixels32()[(tex.height - 1 - 10) * tex.width + 200];
+                    Color32 c = PngPixel(tex, tex.GetPixels32(), 200, 10);
                     AssertChannel(200, c.a, 2, $"alpha at png (200,10), got {c}");
                 }
                 else
                 {
                     // Sun reference pixel png (400,100) has R = 211.
-                    Color32 c = tex.GetPixels32()[(tex.height - 1 - 100) * tex.width + 400];
+                    Color32 c = PngPixel(tex, tex.GetPixels32(), 400, 100);
                     AssertChannel(211, c.r, 3, $"red at png (400,100), got {c}");
                 }
             }

@@ -45,16 +45,12 @@ namespace JpegXL.Editor
                     byte[] data = File.ReadAllBytes(file);
                     JxlImageInfo info = JxlDecoder.ReadInfo(data);
 
+                    // SDR in the file's own colour space, HDR as linear sRGB float.
                     JxlDecodeOptions options = JxlDecodeOptions.Default;
                     if (info.IsHdr)
                     {
                         options.Output = JxlPixelOutput.RgbaFloat;
                         options.ColorTarget = JxlColorTarget.LinearSRgb;
-                    }
-                    else
-                    {
-                        options.Output = JxlPixelOutput.Rgba8;
-                        options.ColorTarget = JxlColorTarget.Original;
                     }
 
                     Stopwatch sw = Stopwatch.StartNew();

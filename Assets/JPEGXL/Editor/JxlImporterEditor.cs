@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using UnityEditor;
 using UnityEditor.AssetImporters;
 using UnityEngine;
@@ -16,14 +15,6 @@ namespace JpegXL.Editor
     [CanEditMultipleObjects]
     class JxlImporterEditor : ScriptedImporterEditor
     {
-        static readonly GUIContent[] s_TypeLabels =
-        {
-            new GUIContent("Default"),
-            new GUIContent("Normal map"),
-            new GUIContent("Sprite (2D and UI)"),
-            new GUIContent("Single Channel"),
-        };
-
         static readonly int[] s_TypeValues =
         {
             (int)TextureImporterType.Default,
@@ -32,14 +23,112 @@ namespace JpegXL.Editor
             (int)TextureImporterType.SingleChannel,
         };
 
-        static readonly int[] s_MaxSizeValues = { 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384 };
-        static readonly GUIContent[] s_MaxSizeLabels = Array.ConvertAll(s_MaxSizeValues, v => new GUIContent(v.ToString()));
+        static readonly int[] s_SpriteModeValues = { (int)SpriteImportMode.Single, (int)SpriteImportMode.Multiple };
 
-        // Display names for the platform tabs; index 0 is the default settings, the rest follow JxlImporter.OverridePlatformNames.
-        static readonly string[] s_PlatformTabs = { "Default", "PC, Mac & Linux Standalone", "Android", "iOS", "WebGL" };
-        static readonly string[] s_PlatformTabIcons = { null, "BuildSettings.Standalone.Small", "BuildSettings.Android.Small", "BuildSettings.iPhone.Small", "BuildSettings.WebGL.Small" };
-        static readonly string[] s_PlatformTabShort = { "Default", "PC", "Android", "iOS", "WebGL" };
-        static GUIContent[] s_PlatformTabContents;
+        static readonly int[] s_MaxSizeValues = { 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384 };
+
+        /// <summary>Labels are built once; IMGUI runs every repaint.</summary>
+        static class Styles
+        {
+            public static readonly GUIContent TextureType = new GUIContent("Texture Type");
+            public static readonly GUIContent TextureShape = new GUIContent("Texture Shape", "JPEG XL files always import as 2D textures.");
+            public static readonly GUIContent TextureShapeValue = new GUIContent("2D");
+            public static readonly GUIContent FilterMode = new GUIContent("Filter Mode");
+            public static readonly GUIContent AnisoLevel = new GUIContent("Aniso Level");
+            public static readonly GUIContent WrapMode = new GUIContent("Wrap Mode");
+
+            public static readonly GUIContent SpriteMode = new GUIContent("Sprite Mode", "Single: one sprite covering the whole image. Multiple: several sprites cut out with the Sprite Editor.");
+            public static readonly GUIContent PixelsPerUnit = new GUIContent("Pixels Per Unit");
+            public static readonly GUIContent MeshType = new GUIContent("Mesh Type");
+            public static readonly GUIContent ExtrudeEdges = new GUIContent("Extrude Edges");
+            public static readonly GUIContent Pivot = new GUIContent("Pivot");
+            public static readonly GUIContent CustomPivot = new GUIContent("Custom Pivot");
+            public static readonly GUIContent GeneratePhysicsShape = new GUIContent("Generate Physics Shape");
+            public static readonly GUIContent OpenSpriteEditor = new GUIContent("Open Sprite Editor", "Slice the texture into sprites and edit names, pivots and borders.");
+
+            public static readonly GUIContent CreateFromGrayscale = new GUIContent("Create from Grayscale");
+            public static readonly GUIContent Bumpiness = new GUIContent("Bumpiness");
+            public static readonly GUIContent Filtering = new GUIContent("Filtering");
+            public static readonly GUIContent FlipGreenChannel = new GUIContent("Flip Green Channel");
+            public static readonly GUIContent Channel = new GUIContent("Channel");
+
+            public static readonly GUIContent Advanced = new GUIContent("Advanced");
+            public static readonly GUIContent SrgbTexture = new GUIContent("sRGB (Color Texture)", "Ignored for HDR files, which always import linear.");
+            public static readonly GUIContent AlphaSource = new GUIContent("Alpha Source");
+            public static readonly GUIContent AlphaIsTransparency = new GUIContent("Alpha Is Transparency");
+            public static readonly GUIContent NonPowerOf2 = new GUIContent("Non-Power of 2");
+            public static readonly GUIContent ReadWrite = new GUIContent("Read/Write");
+            public static readonly GUIContent StreamingMipmaps = new GUIContent("Streaming Mipmaps");
+            public static readonly GUIContent Priority = new GUIContent("Priority");
+            public static readonly GUIContent GenerateMipmaps = new GUIContent("Generate Mipmaps");
+            public static readonly GUIContent BorderMipMaps = new GUIContent("Border Mip Maps");
+            public static readonly GUIContent MipmapFiltering = new GUIContent("Mipmap Filtering");
+            public static readonly GUIContent PreserveCoverage = new GUIContent("Preserve Coverage");
+            public static readonly GUIContent AlphaCutoffValue = new GUIContent("Alpha Cutoff Value");
+            public static readonly GUIContent FadeoutMipMaps = new GUIContent("Fadeout Mip Maps");
+            public static readonly GUIContent FadeStart = new GUIContent("Fade Start");
+            public static readonly GUIContent FadeEnd = new GUIContent("Fade End");
+            public static readonly GUIContent HdrHeader = new GUIContent("HDR (PQ / HLG / float files)");
+
+            public static readonly GUIContent MaxSize = new GUIContent("Max Size", "Textures larger than this are downscaled on import.");
+            public static readonly GUIContent ResizeAlgorithm = new GUIContent("Resize Algorithm");
+            public static readonly GUIContent Format = new GUIContent("Format");
+            public static readonly GUIContent Compression = new GUIContent("Compression");
+            public static readonly GUIContent UseCrunchCompression = new GUIContent("Use Crunch Compression");
+            public static readonly GUIContent CompressorQuality = new GUIContent("Compressor Quality");
+
+            public static readonly GUIContent ImageInfo = new GUIContent("Image info");
+            public static readonly GUIContent MultiEditInfo = new GUIContent("Select a single asset to see its image info.");
+            public static readonly GUIContent TextureFormat = new GUIContent("Texture Format");
+            public static readonly GUIContent TextureSize = new GUIContent("Texture Size");
+            public static readonly GUIContent MipCount = new GUIContent("Mip Count");
+            public static readonly GUIContent Decoder = new GUIContent("Decoder");
+            public static readonly GUIContent DecoderValue = new GUIContent(JxlDecoder.IsAvailable ? "libjxl " + JxlDecoder.NativeVersion : "Not available");
+
+            public static readonly GUIContent[] TypeLabels =
+            {
+                new GUIContent("Default"),
+                new GUIContent("Normal map"),
+                new GUIContent("Sprite (2D and UI)"),
+                new GUIContent("Single Channel"),
+            };
+
+            public static readonly GUIContent[] SpriteModeLabels = { new GUIContent("Single"), new GUIContent("Multiple") };
+
+            public static readonly GUIContent[] MaxSizeLabels = Array.ConvertAll(s_MaxSizeValues, v => new GUIContent(v.ToString()));
+
+            // Index 0 is the default settings, the rest follow JxlImporter.OverridePlatformNames.
+            static readonly string[] s_PlatformNames = { "Default", "PC, Mac & Linux Standalone", "Android", "iOS", "WebGL" };
+            static readonly string[] s_PlatformShortNames = { "Default", "PC", "Android", "iOS", "WebGL" };
+            static readonly string[] s_PlatformIcons = { null, "BuildSettings.Standalone.Small", "BuildSettings.Android.Small", "BuildSettings.iPhone.Small", "BuildSettings.WebGL.Small" };
+            static GUIContent[] s_PlatformTabs;
+
+            /// <summary>"Override for ..." toggle label per platform tab (index 0 unused).</summary>
+            public static readonly GUIContent[] OverrideToggles = Array.ConvertAll(s_PlatformNames, n => new GUIContent("Override for " + n));
+
+            /// <summary>Help text per platform tab when a multi-selection lacks that override entry (index 0 unused).</summary>
+            public static readonly string[] MissingOverride = Array.ConvertAll(s_PlatformNames,
+                n => $"Some selected assets have no '{n}' entry; select them one at a time to add it.");
+
+            /// <summary>Build-target icons like the built-in inspector, falling back to short text when an icon is missing.</summary>
+            public static GUIContent[] PlatformTabs
+            {
+                get
+                {
+                    if (s_PlatformTabs != null)
+                        return s_PlatformTabs;
+                    s_PlatformTabs = new GUIContent[s_PlatformNames.Length];
+                    for (int i = 0; i < s_PlatformNames.Length; i++)
+                    {
+                        Texture icon = s_PlatformIcons[i] != null ? EditorGUIUtility.FindTexture(s_PlatformIcons[i]) : null;
+                        s_PlatformTabs[i] = icon != null
+                            ? new GUIContent(icon, s_PlatformNames[i])
+                            : new GUIContent(s_PlatformShortNames[i], s_PlatformNames[i]);
+                    }
+                    return s_PlatformTabs;
+                }
+            }
+        }
 
         // TextureImporterSettings (serialized field names of UnityEditor.TextureImporterSettings)
         SerializedProperty m_TextureType;
@@ -76,19 +165,25 @@ namespace JpegXL.Editor
         SerializedProperty m_FlipGreenChannel;
         SerializedProperty m_SingleChannelComponent;
 
-        // JXL-specific
+        // JXL-specific, labelled with the field tooltips
         SerializedProperty m_ConvertToSRGB;
         SerializedProperty m_UnpremultiplyAlpha;
         SerializedProperty m_HdrReferenceWhiteNits;
         SerializedProperty m_HdrPrimaries;
         SerializedProperty m_HdrClampNegative;
+        GUIContent m_ConvertToSRGBLabel;
+        GUIContent m_UnpremultiplyAlphaLabel;
+        GUIContent m_HdrReferenceWhiteNitsLabel;
+        GUIContent m_HdrPrimariesLabel;
+        GUIContent m_HdrClampNegativeLabel;
 
         // Platform settings
         SerializedProperty m_DefaultPlatform;
         SerializedProperty m_PlatformOverrides;
 
-        JxlImageInfo m_Info;
-        string m_InfoError;
+        // Source image facts as (label, value) rows, read once in OnEnable; null when several assets are selected.
+        GUIContent[] m_InfoLabels;
+        GUIContent[] m_InfoValues;
 
         bool m_ShowAdvanced;
         bool m_ShowInfo = true;
@@ -137,6 +232,12 @@ namespace JpegXL.Editor
             m_HdrReferenceWhiteNits = serializedObject.FindProperty(nameof(JxlImporter.hdrReferenceWhiteNits));
             m_HdrPrimaries = serializedObject.FindProperty(nameof(JxlImporter.hdrPrimaries));
             m_HdrClampNegative = serializedObject.FindProperty(nameof(JxlImporter.hdrClampNegative));
+            m_ConvertToSRGBLabel = new GUIContent("Convert Wide Gamut to sRGB", m_ConvertToSRGB.tooltip);
+            m_UnpremultiplyAlphaLabel = new GUIContent("Unpremultiply Alpha", m_UnpremultiplyAlpha.tooltip);
+            m_HdrReferenceWhiteNitsLabel = new GUIContent("Reference White (nits)", m_HdrReferenceWhiteNits.tooltip);
+            m_HdrPrimariesLabel = new GUIContent("Primaries", m_HdrPrimaries.tooltip);
+            m_HdrClampNegativeLabel = new GUIContent("Clamp Negative", m_HdrClampNegative.tooltip);
+
             m_DefaultPlatform = serializedObject.FindProperty(nameof(JxlImporter.defaultPlatformSettings));
             m_PlatformOverrides = serializedObject.FindProperty(nameof(JxlImporter.platformOverrides));
 
@@ -151,7 +252,7 @@ namespace JpegXL.Editor
 
             DrawTextureType();
             using (new EditorGUI.DisabledScope(true))
-                EditorGUILayout.LabelField(new GUIContent("Texture Shape", "JPEG XL files always import as 2D textures."), new GUIContent("2D"));
+                EditorGUILayout.LabelField(Styles.TextureShape, Styles.TextureShapeValue);
 
             EditorGUILayout.Space();
             DrawTypeSection();
@@ -161,8 +262,8 @@ namespace JpegXL.Editor
 
             EditorGUILayout.Space();
             DrawWrapMode();
-            EnumField<FilterMode>(m_FilterMode, "Filter Mode");
-            IntSlider(m_Aniso, "Aniso Level", 0, 16);
+            EnumField<FilterMode>(m_FilterMode, Styles.FilterMode);
+            IntSlider(m_Aniso, Styles.AnisoLevel, 0, 16);
 
             EditorGUILayout.Space();
             DrawPlatformSettings();
@@ -181,7 +282,7 @@ namespace JpegXL.Editor
         {
             EditorGUI.BeginChangeCheck();
             EditorGUI.showMixedValue = m_TextureType.hasMultipleDifferentValues;
-            int value = EditorGUILayout.IntPopup(new GUIContent("Texture Type"), m_TextureType.intValue, s_TypeLabels, s_TypeValues);
+            int value = EditorGUILayout.IntPopup(Styles.TextureType, m_TextureType.intValue, Styles.TypeLabels, s_TypeValues);
             EditorGUI.showMixedValue = false;
             if (EditorGUI.EndChangeCheck())
             {
@@ -225,45 +326,42 @@ namespace JpegXL.Editor
                     DrawSpriteMode();
                     using (new EditorGUI.IndentLevelScope())
                     {
-                        FloatField(m_SpritePixelsToUnits, "Pixels Per Unit", 0.001f);
-                        EnumField<SpriteMeshType>(m_SpriteMeshType, "Mesh Type");
-                        IntSlider(m_SpriteExtrude, "Extrude Edges", 0, 32);
+                        FloatField(m_SpritePixelsToUnits, Styles.PixelsPerUnit, 0.001f);
+                        EnumField<SpriteMeshType>(m_SpriteMeshType, Styles.MeshType);
+                        IntSlider(m_SpriteExtrude, Styles.ExtrudeEdges, 0, 32);
                         // Multiple mode keeps a pivot per sprite (edited in the Sprite Editor), like TextureImporter.
                         if (m_SpriteMode.hasMultipleDifferentValues || m_SpriteMode.intValue != (int)SpriteImportMode.Multiple)
                         {
-                            EnumField<SpriteAlignment>(m_Alignment, "Pivot");
+                            EnumField<SpriteAlignment>(m_Alignment, Styles.Pivot);
                             if (!m_Alignment.hasMultipleDifferentValues && m_Alignment.intValue == (int)SpriteAlignment.Custom)
                             {
                                 using (new EditorGUI.IndentLevelScope())
-                                    EditorGUILayout.PropertyField(m_SpritePivot, new GUIContent("Custom Pivot"));
+                                    EditorGUILayout.PropertyField(m_SpritePivot, Styles.CustomPivot);
                             }
                         }
-                        Toggle(m_SpriteGenerateFallbackPhysicsShape, "Generate Physics Shape");
+                        Toggle(m_SpriteGenerateFallbackPhysicsShape, Styles.GeneratePhysicsShape);
                     }
                     DrawSpriteEditorButton();
                     break;
 
                 case TextureImporterType.NormalMap:
-                    Toggle(m_ConvertToNormalMap, "Create from Grayscale");
+                    Toggle(m_ConvertToNormalMap, Styles.CreateFromGrayscale);
                     if (m_ConvertToNormalMap.hasMultipleDifferentValues || m_ConvertToNormalMap.intValue != 0)
                     {
                         using (new EditorGUI.IndentLevelScope())
                         {
-                            FloatSlider(m_HeightScale, "Bumpiness", 0f, 0.3f);
-                            EnumField<TextureImporterNormalFilter>(m_NormalMapFilter, "Filtering");
+                            FloatSlider(m_HeightScale, Styles.Bumpiness, 0f, 0.3f);
+                            EnumField<TextureImporterNormalFilter>(m_NormalMapFilter, Styles.Filtering);
                         }
                     }
-                    Toggle(m_FlipGreenChannel, "Flip Green Channel");
+                    Toggle(m_FlipGreenChannel, Styles.FlipGreenChannel);
                     break;
 
                 case TextureImporterType.SingleChannel:
-                    EnumField<TextureImporterSingleChannelComponent>(m_SingleChannelComponent, "Channel");
+                    EnumField<TextureImporterSingleChannelComponent>(m_SingleChannelComponent, Styles.Channel);
                     break;
             }
         }
-
-        static readonly GUIContent[] s_SpriteModeLabels = { new GUIContent("Single"), new GUIContent("Multiple") };
-        static readonly int[] s_SpriteModeValues = { (int)SpriteImportMode.Single, (int)SpriteImportMode.Multiple };
 
         void DrawSpriteMode()
         {
@@ -271,9 +369,7 @@ namespace JpegXL.Editor
             EditorGUI.showMixedValue = m_SpriteMode.hasMultipleDifferentValues;
             // Polygon is not supported and imports as Single, so show it as Single.
             int current = m_SpriteMode.intValue == (int)SpriteImportMode.Multiple ? (int)SpriteImportMode.Multiple : (int)SpriteImportMode.Single;
-            int value = EditorGUILayout.IntPopup(new GUIContent("Sprite Mode",
-                "Single: one sprite covering the whole image. Multiple: several sprites cut out with the Sprite Editor."),
-                current, s_SpriteModeLabels, s_SpriteModeValues);
+            int value = EditorGUILayout.IntPopup(Styles.SpriteMode, current, Styles.SpriteModeLabels, s_SpriteModeValues);
             EditorGUI.showMixedValue = false;
             if (EditorGUI.EndChangeCheck())
                 m_SpriteMode.intValue = value;
@@ -286,7 +382,7 @@ namespace JpegXL.Editor
             {
                 GUILayout.BeginHorizontal();
                 GUILayout.FlexibleSpace();
-                bool open = GUILayout.Button(new GUIContent("Open Sprite Editor", "Slice the texture into sprites and edit names, pivots and borders."), GUILayout.Width(150));
+                bool open = GUILayout.Button(Styles.OpenSpriteEditor, GUILayout.Width(150));
                 GUILayout.EndHorizontal();
                 if (open)
                 {
@@ -316,13 +412,13 @@ namespace JpegXL.Editor
         /// The Sprite Editor window class is internal to com.unity.2d.sprite; its menu item opens it on the current selection,
         /// and it finds <see cref="JxlImporter"/> as the data provider through the asset's importer.
         /// </summary>
-        internal static bool OpenSpriteEditor(string assetPath)
+        static void OpenSpriteEditor(string assetPath)
         {
             var asset = AssetDatabase.LoadMainAssetAtPath(assetPath);
             if (asset == null)
-                return false;
+                return;
             Selection.activeObject = asset;
-            return EditorApplication.ExecuteMenuItem("Window/2D/Sprite Editor");
+            EditorApplication.ExecuteMenuItem("Window/2D/Sprite Editor");
         }
 #endif
 
@@ -330,7 +426,7 @@ namespace JpegXL.Editor
 
         void DrawAdvanced()
         {
-            m_ShowAdvanced = EditorGUILayout.Foldout(m_ShowAdvanced, "Advanced", true);
+            m_ShowAdvanced = EditorGUILayout.Foldout(m_ShowAdvanced, Styles.Advanced, true);
             if (!m_ShowAdvanced)
                 return;
 
@@ -340,52 +436,52 @@ namespace JpegXL.Editor
                                  (TextureImporterType)m_TextureType.intValue == TextureImporterType.Default ||
                                  (TextureImporterType)m_TextureType.intValue == TextureImporterType.Sprite;
                 if (colorType)
-                    Toggle(m_sRGBTexture, "sRGB (Color Texture)", "Ignored for HDR files, which always import linear.");
-                EnumField<TextureImporterAlphaSource>(m_AlphaSource, "Alpha Source");
-                Toggle(m_AlphaIsTransparency, "Alpha Is Transparency");
-                EnumField<TextureImporterNPOTScale>(m_NPOTScale, "Non-Power of 2");
-                Toggle(m_IsReadable, "Read/Write");
+                    Toggle(m_sRGBTexture, Styles.SrgbTexture);
+                EnumField<TextureImporterAlphaSource>(m_AlphaSource, Styles.AlphaSource);
+                Toggle(m_AlphaIsTransparency, Styles.AlphaIsTransparency);
+                EnumField<TextureImporterNPOTScale>(m_NPOTScale, Styles.NonPowerOf2);
+                Toggle(m_IsReadable, Styles.ReadWrite);
 
-                Toggle(m_StreamingMipmaps, "Streaming Mipmaps");
+                Toggle(m_StreamingMipmaps, Styles.StreamingMipmaps);
                 if (m_StreamingMipmaps.hasMultipleDifferentValues || m_StreamingMipmaps.intValue != 0)
                 {
                     using (new EditorGUI.IndentLevelScope())
-                        IntField(m_StreamingMipmapsPriority, "Priority");
+                        IntField(m_StreamingMipmapsPriority, Styles.Priority);
                 }
 
-                Toggle(m_EnableMipMap, "Generate Mipmaps");
+                Toggle(m_EnableMipMap, Styles.GenerateMipmaps);
                 if (m_EnableMipMap.hasMultipleDifferentValues || m_EnableMipMap.intValue != 0)
                 {
                     using (new EditorGUI.IndentLevelScope())
                     {
-                        Toggle(m_BorderMipMap, "Border Mip Maps");
-                        EnumField<TextureImporterMipFilter>(m_MipMapMode, "Mipmap Filtering");
-                        Toggle(m_MipMapsPreserveCoverage, "Preserve Coverage");
+                        Toggle(m_BorderMipMap, Styles.BorderMipMaps);
+                        EnumField<TextureImporterMipFilter>(m_MipMapMode, Styles.MipmapFiltering);
+                        Toggle(m_MipMapsPreserveCoverage, Styles.PreserveCoverage);
                         if (m_MipMapsPreserveCoverage.hasMultipleDifferentValues || m_MipMapsPreserveCoverage.intValue != 0)
                         {
                             using (new EditorGUI.IndentLevelScope())
-                                FloatSlider(m_AlphaTestReferenceValue, "Alpha Cutoff Value", 0f, 1f);
+                                FloatSlider(m_AlphaTestReferenceValue, Styles.AlphaCutoffValue, 0f, 1f);
                         }
-                        Toggle(m_FadeOut, "Fadeout Mip Maps");
+                        Toggle(m_FadeOut, Styles.FadeoutMipMaps);
                         if (m_FadeOut.hasMultipleDifferentValues || m_FadeOut.intValue != 0)
                         {
                             using (new EditorGUI.IndentLevelScope())
                             {
-                                IntSlider(m_MipMapFadeDistanceStart, "Fade Start", 0, 10);
-                                IntSlider(m_MipMapFadeDistanceEnd, "Fade End", 0, 10);
+                                IntSlider(m_MipMapFadeDistanceStart, Styles.FadeStart, 0, 10);
+                                IntSlider(m_MipMapFadeDistanceEnd, Styles.FadeEnd, 0, 10);
                             }
                         }
                     }
                 }
 
-                EditorGUILayout.PropertyField(m_ConvertToSRGB, new GUIContent("Convert Wide Gamut to sRGB", m_ConvertToSRGB.tooltip));
-                EditorGUILayout.PropertyField(m_UnpremultiplyAlpha, new GUIContent("Unpremultiply Alpha", m_UnpremultiplyAlpha.tooltip));
+                EditorGUILayout.PropertyField(m_ConvertToSRGB, m_ConvertToSRGBLabel);
+                EditorGUILayout.PropertyField(m_UnpremultiplyAlpha, m_UnpremultiplyAlphaLabel);
 
                 EditorGUILayout.Space(2f);
-                EditorGUILayout.LabelField("HDR (PQ / HLG / float files)", EditorStyles.miniBoldLabel);
-                EditorGUILayout.PropertyField(m_HdrReferenceWhiteNits, new GUIContent("Reference White (nits)", m_HdrReferenceWhiteNits.tooltip));
-                EditorGUILayout.PropertyField(m_HdrPrimaries, new GUIContent("Primaries", m_HdrPrimaries.tooltip));
-                EditorGUILayout.PropertyField(m_HdrClampNegative, new GUIContent("Clamp Negative", m_HdrClampNegative.tooltip));
+                EditorGUILayout.LabelField(Styles.HdrHeader, EditorStyles.miniBoldLabel);
+                EditorGUILayout.PropertyField(m_HdrReferenceWhiteNits, m_HdrReferenceWhiteNitsLabel);
+                EditorGUILayout.PropertyField(m_HdrPrimaries, m_HdrPrimariesLabel);
+                EditorGUILayout.PropertyField(m_HdrClampNegative, m_HdrClampNegativeLabel);
             }
         }
 
@@ -395,7 +491,7 @@ namespace JpegXL.Editor
                          m_WrapU.intValue != m_WrapV.intValue;
             EditorGUI.BeginChangeCheck();
             EditorGUI.showMixedValue = mixed;
-            var value = (TextureWrapMode)EditorGUILayout.EnumPopup(new GUIContent("Wrap Mode"), (TextureWrapMode)m_WrapU.intValue);
+            var value = (TextureWrapMode)EditorGUILayout.EnumPopup(Styles.WrapMode, (TextureWrapMode)m_WrapU.intValue);
             EditorGUI.showMixedValue = false;
             if (EditorGUI.EndChangeCheck())
                 m_WrapU.intValue = m_WrapV.intValue = m_WrapW.intValue = (int)value;
@@ -405,7 +501,7 @@ namespace JpegXL.Editor
 
         void DrawPlatformSettings()
         {
-            m_PlatformTab = GUILayout.Toolbar(m_PlatformTab, PlatformTabContents());
+            m_PlatformTab = GUILayout.Toolbar(m_PlatformTab, Styles.PlatformTabs);
 
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
@@ -421,21 +517,18 @@ namespace JpegXL.Editor
                 {
                     if (serializedObject.isEditingMultipleObjects)
                     {
-                        EditorGUILayout.HelpBox($"Some selected assets have no '{platformName}' entry; select them one at a time to add it.", MessageType.Info);
+                        EditorGUILayout.HelpBox(Styles.MissingOverride[m_PlatformTab], MessageType.Info);
                         return;
                     }
-                    bool add = EditorGUILayout.Toggle($"Override for {s_PlatformTabs[m_PlatformTab]}", false);
-                    if (add)
-                        entry = AddOverride(platformName);
-                    else
+                    if (!EditorGUILayout.Toggle(Styles.OverrideToggles[m_PlatformTab], false))
                         return;
+                    entry = AddOverride(platformName);
                 }
 
                 SerializedProperty overridden = entry.FindPropertyRelative("m_Overridden");
-                Toggle(overridden, $"Override for {s_PlatformTabs[m_PlatformTab]}");
+                Toggle(overridden, Styles.OverrideToggles[m_PlatformTab]);
                 bool enabled = overridden.hasMultipleDifferentValues || overridden.intValue != 0;
-                using (new EditorGUI.DisabledScope(!enabled))
-                    DrawPlatformFields(enabled ? entry : m_DefaultPlatform, enabled);
+                DrawPlatformFields(enabled ? entry : m_DefaultPlatform, enabled);
             }
         }
 
@@ -446,36 +539,20 @@ namespace JpegXL.Editor
                 SerializedProperty maxSize = platform.FindPropertyRelative("m_MaxTextureSize");
                 EditorGUI.BeginChangeCheck();
                 EditorGUI.showMixedValue = maxSize.hasMultipleDifferentValues;
-                int size = EditorGUILayout.IntPopup(new GUIContent("Max Size", "Textures larger than this are downscaled on import."), maxSize.intValue, s_MaxSizeLabels, s_MaxSizeValues);
+                int size = EditorGUILayout.IntPopup(Styles.MaxSize, maxSize.intValue, Styles.MaxSizeLabels, s_MaxSizeValues);
                 EditorGUI.showMixedValue = false;
                 if (EditorGUI.EndChangeCheck())
                     maxSize.intValue = size;
 
-                EnumField<TextureResizeAlgorithm>(platform.FindPropertyRelative("m_ResizeAlgorithm"), "Resize Algorithm");
-                EnumField<TextureImporterFormat>(platform.FindPropertyRelative("m_TextureFormat"), "Format");
-                EnumField<TextureImporterCompression>(platform.FindPropertyRelative("m_TextureCompression"), "Compression");
+                EnumField<TextureResizeAlgorithm>(platform.FindPropertyRelative("m_ResizeAlgorithm"), Styles.ResizeAlgorithm);
+                EnumField<TextureImporterFormat>(platform.FindPropertyRelative("m_TextureFormat"), Styles.Format);
+                EnumField<TextureImporterCompression>(platform.FindPropertyRelative("m_TextureCompression"), Styles.Compression);
 
                 SerializedProperty crunch = platform.FindPropertyRelative("m_CrunchedCompression");
-                Toggle(crunch, "Use Crunch Compression");
+                Toggle(crunch, Styles.UseCrunchCompression);
                 if (crunch.hasMultipleDifferentValues || crunch.intValue != 0)
-                    IntSlider(platform.FindPropertyRelative("m_CompressionQuality"), "Compressor Quality", 0, 100);
+                    IntSlider(platform.FindPropertyRelative("m_CompressionQuality"), Styles.CompressorQuality, 0, 100);
             }
-        }
-
-        /// <summary>Build-target icons like the built-in inspector, falling back to short text when an icon is missing.</summary>
-        static GUIContent[] PlatformTabContents()
-        {
-            if (s_PlatformTabContents != null)
-                return s_PlatformTabContents;
-            s_PlatformTabContents = new GUIContent[s_PlatformTabs.Length];
-            for (int i = 0; i < s_PlatformTabs.Length; i++)
-            {
-                Texture icon = s_PlatformTabIcons[i] != null ? EditorGUIUtility.FindTexture(s_PlatformTabIcons[i]) : null;
-                s_PlatformTabContents[i] = icon != null
-                    ? new GUIContent(icon, s_PlatformTabs[i])
-                    : new GUIContent(s_PlatformTabShort[i], s_PlatformTabs[i]);
-            }
-            return s_PlatformTabContents;
         }
 
         SerializedProperty FindOverride(string platformName)
@@ -495,12 +572,13 @@ namespace JpegXL.Editor
         /// <summary>Multi-editing array elements by index is only safe when every target lists the platforms in the same order.</summary>
         bool SameOverrideLayout()
         {
-            JxlImporter first = targets[0] as JxlImporter;
+            var first = targets[0] as JxlImporter;
+            if (first == null || first.platformOverrides == null)
+                return false;
             foreach (var t in targets)
             {
                 var other = t as JxlImporter;
-                if (first == null || other == null || other.platformOverrides == null || first.platformOverrides == null ||
-                    other.platformOverrides.Count != first.platformOverrides.Count)
+                if (other == null || other.platformOverrides == null || other.platformOverrides.Count != first.platformOverrides.Count)
                     return false;
                 for (int i = 0; i < first.platformOverrides.Count; i++)
                 {
@@ -523,72 +601,75 @@ namespace JpegXL.Editor
             element.FindPropertyRelative("m_ResizeAlgorithm").intValue = (int)defaults.resizeAlgorithm;
             element.FindPropertyRelative("m_TextureFormat").intValue = (int)defaults.format;
             element.FindPropertyRelative("m_TextureCompression").intValue = (int)defaults.textureCompression;
-            element.FindPropertyRelative("m_CrunchedCompression").intValue = 0;
+            element.FindPropertyRelative("m_CrunchedCompression").intValue = defaults.crunchedCompression ? 1 : 0;
             element.FindPropertyRelative("m_CompressionQuality").intValue = defaults.compressionQuality;
             return element;
         }
 
         // ------------------------------------------------------------------ image info
 
-        /// <summary>Reads the file header through libjxl (no pixel decode) so the inspector can show image facts.</summary>
+        /// <summary>Reads the file header through libjxl (no pixel decode) and formats the rows shown under Image info.</summary>
         void ReadImageInfo()
         {
-            m_Info = null;
-            m_InfoError = null;
+            m_InfoLabels = m_InfoValues = null;
             if (targets.Length != 1 || !(target is JxlImporter importer))
                 return;
-            try
+
+            if (!JxlImporter.TryReadInfo(importer.assetPath, out JxlImageInfo info, out string error))
             {
-                if (!JxlDecoder.IsAvailable)
-                    m_InfoError = "Decoder not available.";
-                else
-                    m_Info = JxlDecoder.ReadInfo(File.ReadAllBytes(importer.assetPath));
+                m_InfoLabels = new[] { new GUIContent(error) };
+                m_InfoValues = new[] { GUIContent.none };
+                return;
             }
-            catch (Exception e)
+
+            string note = (info.HasAnimation ? "Animated (first frame only). " : "") +
+                          (info.NumExtraChannels > 0 ? $"{info.NumExtraChannels} extra channel(s) ignored." : "");
+            string[] rows =
             {
-                m_InfoError = e.Message;
+                "Size", $"{info.Width} x {info.Height}",
+                "Bits Per Sample", info.ExponentBitsPerSample > 0 ? $"{info.BitsPerSample} (float)" : info.BitsPerSample.ToString(),
+                "Transfer", info.Transfer.ToString(),
+                "Primaries", info.Primaries + (info.IsWideGamut ? " (wide gamut)" : ""),
+                "Alpha", info.HasAlpha ? (info.AlphaPremultiplied ? "Yes (premultiplied)" : "Yes") : "No",
+                "HDR", info.IsHdr ? "Yes (imported linear)" : "No",
+                "Note", note,
+            };
+            int count = rows.Length / 2 - (note.Length > 0 ? 0 : 1);
+            m_InfoLabels = new GUIContent[count];
+            m_InfoValues = new GUIContent[count];
+            for (int i = 0; i < count; i++)
+            {
+                m_InfoLabels[i] = new GUIContent(rows[2 * i]);
+                m_InfoValues[i] = new GUIContent(rows[2 * i + 1]);
             }
         }
 
         void DrawImageInfo()
         {
-            m_ShowInfo = EditorGUILayout.Foldout(m_ShowInfo, "Image info", true);
+            m_ShowInfo = EditorGUILayout.Foldout(m_ShowInfo, Styles.ImageInfo, true);
             if (!m_ShowInfo)
                 return;
 
             using (new EditorGUI.IndentLevelScope())
             using (new EditorGUI.DisabledScope(true))
             {
-                if (serializedObject.isEditingMultipleObjects)
+                if (m_InfoLabels == null)
                 {
-                    EditorGUILayout.LabelField("Select a single asset to see its image info.");
+                    EditorGUILayout.LabelField(Styles.MultiEditInfo);
                     return;
                 }
 
-                if (m_Info == null)
-                {
-                    EditorGUILayout.LabelField(m_InfoError ?? "No image info available.");
-                }
-                else
-                {
-                    EditorGUILayout.LabelField("Size", $"{m_Info.Width} x {m_Info.Height}");
-                    EditorGUILayout.LabelField("Bits Per Sample", m_Info.ExponentBitsPerSample > 0 ? $"{m_Info.BitsPerSample} (float)" : m_Info.BitsPerSample.ToString());
-                    EditorGUILayout.LabelField("Transfer", m_Info.Transfer.ToString());
-                    EditorGUILayout.LabelField("Primaries", m_Info.Primaries.ToString() + (m_Info.IsWideGamut ? " (wide gamut)" : ""));
-                    EditorGUILayout.LabelField("Alpha", m_Info.HasAlpha ? (m_Info.AlphaPremultiplied ? "Yes (premultiplied)" : "Yes") : "No");
-                    EditorGUILayout.LabelField("HDR", m_Info.IsHdr ? "Yes (imported linear)" : "No");
-                    if (m_Info.NumExtraChannels > 0 || m_Info.HasAnimation)
-                        EditorGUILayout.LabelField("Note", (m_Info.HasAnimation ? "Animated (first frame only). " : "") + (m_Info.NumExtraChannels > 0 ? $"{m_Info.NumExtraChannels} extra channel(s) ignored." : ""));
-                }
+                for (int i = 0; i < m_InfoLabels.Length; i++)
+                    EditorGUILayout.LabelField(m_InfoLabels[i], m_InfoValues[i]);
 
                 if (assetTarget is Texture2D tex)
                 {
-                    EditorGUILayout.LabelField("Texture Format", tex.format.ToString());
-                    EditorGUILayout.LabelField("Texture Size", $"{tex.width} x {tex.height}");
-                    EditorGUILayout.LabelField("Mip Count", tex.mipmapCount.ToString());
+                    EditorGUILayout.LabelField(Styles.TextureFormat, EditorGUIUtility.TrTempContent(tex.format.ToString()));
+                    EditorGUILayout.LabelField(Styles.TextureSize, EditorGUIUtility.TrTempContent($"{tex.width} x {tex.height}"));
+                    EditorGUILayout.LabelField(Styles.MipCount, EditorGUIUtility.TrTempContent(tex.mipmapCount.ToString()));
                 }
 
-                EditorGUILayout.LabelField("Decoder", JxlDecoder.IsAvailable ? "libjxl " + JxlDecoder.NativeVersion : "Not available");
+                EditorGUILayout.LabelField(Styles.Decoder, Styles.DecoderValue);
             }
         }
 
@@ -604,74 +685,74 @@ namespace JpegXL.Editor
                 p.intValue = value ? 1 : 0;
         }
 
-        static void Toggle(SerializedProperty p, string label, string tooltip = null)
+        static void Toggle(SerializedProperty p, GUIContent label)
         {
             if (p == null)
                 return;
             EditorGUI.BeginChangeCheck();
             EditorGUI.showMixedValue = p.hasMultipleDifferentValues;
-            bool value = EditorGUILayout.Toggle(new GUIContent(label, tooltip), ReadBool(p));
+            bool value = EditorGUILayout.Toggle(label, ReadBool(p));
             EditorGUI.showMixedValue = false;
             if (EditorGUI.EndChangeCheck())
                 WriteBool(p, value);
         }
 
-        static void EnumField<T>(SerializedProperty p, string label) where T : Enum
+        static void EnumField<T>(SerializedProperty p, GUIContent label) where T : Enum
         {
             if (p == null)
                 return;
             EditorGUI.BeginChangeCheck();
             EditorGUI.showMixedValue = p.hasMultipleDifferentValues;
             var current = (T)Enum.ToObject(typeof(T), p.intValue);
-            Enum value = EditorGUILayout.EnumPopup(new GUIContent(label), current);
+            Enum value = EditorGUILayout.EnumPopup(label, current);
             EditorGUI.showMixedValue = false;
             if (EditorGUI.EndChangeCheck())
                 p.intValue = Convert.ToInt32(value);
         }
 
-        static void IntSlider(SerializedProperty p, string label, int min, int max)
+        static void IntSlider(SerializedProperty p, GUIContent label, int min, int max)
         {
             if (p == null)
                 return;
             EditorGUI.BeginChangeCheck();
             EditorGUI.showMixedValue = p.hasMultipleDifferentValues;
-            int value = EditorGUILayout.IntSlider(new GUIContent(label), p.intValue, min, max);
+            int value = EditorGUILayout.IntSlider(label, p.intValue, min, max);
             EditorGUI.showMixedValue = false;
             if (EditorGUI.EndChangeCheck())
                 p.intValue = value;
         }
 
-        static void IntField(SerializedProperty p, string label)
+        static void IntField(SerializedProperty p, GUIContent label)
         {
             if (p == null)
                 return;
             EditorGUI.BeginChangeCheck();
             EditorGUI.showMixedValue = p.hasMultipleDifferentValues;
-            int value = EditorGUILayout.IntField(new GUIContent(label), p.intValue);
+            int value = EditorGUILayout.IntField(label, p.intValue);
             EditorGUI.showMixedValue = false;
             if (EditorGUI.EndChangeCheck())
                 p.intValue = value;
         }
 
-        static void FloatField(SerializedProperty p, string label, float min)
+        static void FloatField(SerializedProperty p, GUIContent label, float min)
         {
             if (p == null)
                 return;
             EditorGUI.BeginChangeCheck();
             EditorGUI.showMixedValue = p.hasMultipleDifferentValues;
-            float value = EditorGUILayout.FloatField(new GUIContent(label), p.floatValue);
+            float value = EditorGUILayout.FloatField(label, p.floatValue);
             EditorGUI.showMixedValue = false;
             if (EditorGUI.EndChangeCheck())
                 p.floatValue = Mathf.Max(min, value);
         }
 
-        static void FloatSlider(SerializedProperty p, string label, float min, float max)
+        static void FloatSlider(SerializedProperty p, GUIContent label, float min, float max)
         {
             if (p == null)
                 return;
             EditorGUI.BeginChangeCheck();
             EditorGUI.showMixedValue = p.hasMultipleDifferentValues;
-            float value = EditorGUILayout.Slider(new GUIContent(label), p.floatValue, min, max);
+            float value = EditorGUILayout.Slider(label, p.floatValue, min, max);
             EditorGUI.showMixedValue = false;
             if (EditorGUI.EndChangeCheck())
                 p.floatValue = value;

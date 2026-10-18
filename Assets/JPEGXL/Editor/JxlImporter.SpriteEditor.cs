@@ -22,6 +22,7 @@ namespace JpegXL.Editor
         [NonSerialized] List<SpriteRect> m_EditRects;
         [NonSerialized] SpriteRect m_EditSingle;
         [NonSerialized] Texture2D m_ReadableTexture;
+        [NonSerialized] bool m_ReadableTextureFailed;
         [NonSerialized] int m_SourceWidth;
         [NonSerialized] int m_SourceHeight;
 
@@ -107,6 +108,8 @@ namespace JpegXL.Editor
             }
             spriteSheet = sheet;
             EditorUtility.SetDirty(this);
+            // The window reimports next; settings may have changed, so decode the slicing copy afresh if asked again.
+            ReleaseReadableTexture();
         }
 
         T ISpriteEditorDataProvider.GetDataProvider<T>()
@@ -142,38 +145,33 @@ namespace JpegXL.Editor
 
         /// <summary>
         /// A readable RGBA32 copy at source size, decoded on demand (the imported texture may be compressed, resized or
-        /// non-readable). Used by automatic and grid slicing. HDR files are decoded to 8-bit sRGB for this purpose.
+        /// non-readable) and cached, since the Sprite Frame module asks for it every frame. HDR files are decoded to
+        /// 8-bit sRGB. A failed decode is not retried until the provider is initialised again.
         /// </summary>
         Texture2D ITextureDataProvider.GetReadableTexture2D()
         {
-            if (m_ReadableTexture == null)
-                m_ReadableTexture = DecodeReadableTexture(assetPath, convertToSRGB, unpremultiplyAlpha);
+            if (m_ReadableTexture == null && !m_ReadableTextureFailed)
+            {
+                m_ReadableTexture = DecodeReadableTexture();
+                m_ReadableTextureFailed = m_ReadableTexture == null;
+            }
             return m_ReadableTexture;
         }
 
-        /// <summary>Decodes <paramref name="path"/> to a readable, uncompressed RGBA32 texture in Unity row order.</summary>
-        internal static Texture2D DecodeReadableTexture(string path, bool convertToSrgb, bool unpremultiply)
+        /// <summary>Decodes the source to a readable, uncompressed RGBA32 texture in Unity row order, or null on failure.</summary>
+        Texture2D DecodeReadableTexture()
         {
-            if (string.IsNullOrEmpty(path) || !JxlDecoder.IsAvailable)
+            if (!TryReadInfo(assetPath, out JxlImageInfo info, out string error))
+            {
+                Debug.LogWarning($"JPEG XL: could not decode '{assetPath}' for the Sprite Editor: {error}");
                 return null;
+            }
             try
             {
-                byte[] data = File.ReadAllBytes(path);
-                JxlImageInfo info = JxlDecoder.ReadInfo(data);
-                bool convert = info.IsHdr || (convertToSrgb && (info.IsWideGamut || info.Transfer != JxlTransfer.SRgb));
-                var options = new JxlDecodeOptions
+                JxlDecodedImage decoded = JxlDecoder.Decode(File.ReadAllBytes(assetPath), GetDecodeOptions(info, rgba8: true));
+                var tex = new Texture2D(decoded.Info.Width, decoded.Info.Height, TextureFormat.RGBA32, false, false)
                 {
-                    Output = JxlPixelOutput.Rgba8,
-                    ColorTarget = convert ? JxlColorTarget.SRgb : JxlColorTarget.Original,
-                    FlipVertically = true,
-                    UnpremultiplyAlpha = unpremultiply,
-                    DesiredIntensityTarget = 0f
-                };
-                JxlDecodedImage decoded = JxlDecoder.Decode(data, options);
-                JxlImageInfo decodedInfo = decoded.Info ?? info;
-                var tex = new Texture2D(decodedInfo.Width, decodedInfo.Height, TextureFormat.RGBA32, false, false)
-                {
-                    name = Path.GetFileNameWithoutExtension(path) + " (readable)",
+                    name = Path.GetFileNameWithoutExtension(assetPath) + " (readable)",
                     hideFlags = HideFlags.HideAndDontSave,
                     filterMode = FilterMode.Point
                 };
@@ -183,21 +181,25 @@ namespace JpegXL.Editor
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"JPEG XL: could not decode '{path}' for the Sprite Editor: {e.Message}");
+                Debug.LogWarning($"JPEG XL: could not decode '{assetPath}' for the Sprite Editor: {e.Message}");
                 return null;
             }
         }
 
         // ------------------------------------------------------------------ helpers
 
-        /// <summary>The importer instance is replaced on every reimport; free the decoded copy with it.</summary>
+        /// <summary>Frees the decoded slicing copy when Unity destroys this importer instance.</summary>
         void OnDestroy()
         {
+            ReleaseReadableTexture();
+        }
+
+        void ReleaseReadableTexture()
+        {
             if (m_ReadableTexture != null)
-            {
                 DestroyImmediate(m_ReadableTexture);
-                m_ReadableTexture = null;
-            }
+            m_ReadableTexture = null;
+            m_ReadableTextureFailed = false;
         }
 
         void EnsureEditRects()
@@ -208,11 +210,7 @@ namespace JpegXL.Editor
 
         void LoadEditRects()
         {
-            if (m_ReadableTexture != null)
-            {
-                DestroyImmediate(m_ReadableTexture);
-                m_ReadableTexture = null;
-            }
+            ReleaseReadableTexture();
             m_SourceWidth = m_SourceHeight = 0;
             EnsureSourceSize();
 
@@ -252,23 +250,16 @@ namespace JpegXL.Editor
         {
             if (m_SourceWidth > 0 && m_SourceHeight > 0)
                 return;
-            try
+            if (TryReadInfo(assetPath, out JxlImageInfo info, out _))
             {
-                JxlImageInfo info = JxlDecoder.IsAvailable && File.Exists(assetPath) ? JxlDecoder.ReadInfo(File.ReadAllBytes(assetPath)) : null;
-                m_SourceWidth = info?.Width ?? 0;
-                m_SourceHeight = info?.Height ?? 0;
+                m_SourceWidth = info.Width;
+                m_SourceHeight = info.Height;
+                return;
             }
-            catch (Exception)
-            {
-                m_SourceWidth = m_SourceHeight = 0;
-            }
-            if (m_SourceWidth <= 0 || m_SourceHeight <= 0)
-            {
-                // Fall back to the imported texture (placeholder or decoder unavailable).
-                var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
-                m_SourceWidth = tex != null ? tex.width : 0;
-                m_SourceHeight = tex != null ? tex.height : 0;
-            }
+            // Decoder unavailable or file unreadable: fall back to the imported texture (the placeholder).
+            var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
+            m_SourceWidth = tex != null ? tex.width : 0;
+            m_SourceHeight = tex != null ? tex.height : 0;
         }
 
         static SpriteRect Copy(SpriteRect source)

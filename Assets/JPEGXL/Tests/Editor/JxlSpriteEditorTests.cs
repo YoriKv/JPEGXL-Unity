@@ -1,17 +1,16 @@
 #if JXL_2D_SPRITE
-using System;
 using System.Linq;
 using JpegXL.Editor;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.U2D.Sprites;
 using UnityEngine;
-using static JpegXL.Tests.JxlImporterTests;
+using static JpegXL.Tests.JxlTestUtil;
 
 namespace JpegXL.Tests
 {
     /// <summary>
-    /// Phase 5: Sprite Editor support. The data provider is fetched the way the Sprite Editor window does it
+    /// Sprite Editor support. The data provider is fetched the way the Sprite Editor window does it
     /// (<see cref="SpriteDataProviderFactories.GetSpriteEditorDataProviderFromObject"/> on the main asset).
     /// </summary>
     public class JxlSpriteEditorTests
@@ -35,6 +34,15 @@ namespace JpegXL.Tests
             importer.textureSettings.npotScale = TextureImporterNPOTScale.None;
         }
 
+        /// <summary>What the Sprite Editor window does after <see cref="ISpriteEditorDataProvider.Apply"/>: save the importer and reimport.</summary>
+        static void ApplyAndReimport(ISpriteEditorDataProvider provider)
+        {
+            provider.Apply();
+            var importer = (AssetImporter)provider.targetObject;
+            EditorUtility.SetDirty(importer);
+            importer.SaveAndReimport();
+        }
+
         static readonly GUID LeftId = new GUID("0123456789abcdef0123456789abcdef");
         static readonly GUID RightId = new GUID("fedcba9876543210fedcba9876543210");
 
@@ -51,10 +59,7 @@ namespace JpegXL.Tests
                 new SpriteRect { name = "sun_left", rect = new Rect(0, 0, 256, 512), alignment = SpriteAlignment.BottomLeft, pivot = Vector2.zero, spriteID = LeftId },
                 new SpriteRect { name = "sun_right", rect = new Rect(256, 128, 256, 384), alignment = SpriteAlignment.Custom, pivot = new Vector2(0.25f, 0.75f), border = new Vector4(1, 2, 3, 4), spriteID = RightId },
             });
-            provider.Apply();
-            var importer = (AssetImporter)provider.targetObject;
-            EditorUtility.SetDirty(importer);
-            importer.SaveAndReimport();
+            ApplyAndReimport(provider);
         }
 
         [Test]
@@ -108,10 +113,7 @@ namespace JpegXL.Tests
                 SpriteRect[] rects = provider.GetSpriteRects();
                 rects.First(r => r.spriteID == RightId).name = "sun_right_renamed";
                 provider.SetSpriteRects(rects);
-                provider.Apply();
-                var importer = (AssetImporter)provider.targetObject;
-                EditorUtility.SetDirty(importer);
-                importer.SaveAndReimport();
+                ApplyAndReimport(provider);
 
                 Sprite after = AssetDatabase.LoadAllAssetRepresentationsAtPath(Sun).OfType<Sprite>().FirstOrDefault(s => s.name == "sun_right_renamed");
                 Assert.IsNotNull(after, "renamed sprite");
@@ -142,10 +144,7 @@ namespace JpegXL.Tests
                 rects[0].pivot = new Vector2(0.1f, 0.2f);
                 rects[0].border = new Vector4(5, 6, 7, 8);
                 provider.SetSpriteRects(rects);
-                provider.Apply();
-                var importerObj = (AssetImporter)provider.targetObject;
-                EditorUtility.SetDirty(importerObj);
-                importerObj.SaveAndReimport();
+                ApplyAndReimport(provider);
 
                 var sprites = AssetDatabase.LoadAllAssetRepresentationsAtPath(Sun).OfType<Sprite>().ToArray();
                 Assert.AreEqual(1, sprites.Length, "Single mode ignores the stored sheet");
@@ -203,10 +202,10 @@ namespace JpegXL.Tests
                 Color32[] px = readable.GetPixels32();
                 foreach (int[] p in SunReferencePixels)
                 {
-                    Color32 c = px[(511 - p[1]) * 512 + p[0]];
-                    Assert.LessOrEqual(Math.Abs(c.r - p[2]), 3, $"R at png ({p[0]},{p[1]}) got {c}");
-                    Assert.LessOrEqual(Math.Abs(c.g - p[3]), 3, $"G at png ({p[0]},{p[1]}) got {c}");
-                    Assert.LessOrEqual(Math.Abs(c.b - p[4]), 3, $"B at png ({p[0]},{p[1]}) got {c}");
+                    Color32 c = PngPixel(readable, px, p[0], p[1]);
+                    AssertChannel(p[2], c.r, 3, $"R at png ({p[0]},{p[1]})");
+                    AssertChannel(p[3], c.g, 3, $"G at png ({p[0]},{p[1]})");
+                    AssertChannel(p[4], c.b, 3, $"B at png ({p[0]},{p[1]})");
                 }
             }
             finally
